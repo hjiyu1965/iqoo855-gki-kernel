@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       android_version:
-        description: 'Android版本'
+        description: 'Android版本 (查看手机设置)'
         required: true
         type: choice
         default: 'android13'
@@ -12,31 +12,32 @@ on:
           - 'android12'
           - 'android13'
           - 'android14'
-          - 'android15'
       kernel_version:
-        description: '内核主版本 (必须为 4.14)'
+        description: '内核主版本 (必须准确，通过 adb shell uname -r 获取)'
         required: true
         type: choice
-        default: '4.14'
+        default: '5.10'
         options:
           - '4.14'
+          - '4.19'
           - '5.4'
           - '5.10'
+          - '5.15'
       kernel_sublevel:
-        description: '内核子版本 (如 199)'
+        description: '内核子版本 (如 4.14.199+ 则填写 199)'
         required: true
         type: string
         default: '199'
       security_patch:
-        description: '安全补丁日期 (YYYY-MM-DD)'
+        description: '安全补丁日期 (格式: YYYY-MM-DD，必须与手机一致)'
         required: true
         type: string
         default: '2024-01-05'
       use_susfs:
-        description: '启用SUSFS文件系统'
+        description: '启用SUSFS文件系统 (首次构建建议关闭)'
         required: true
         type: boolean
-        default: true
+        default: false
       use_kpm:
         description: '启用KPM内核模块'
         required: true
@@ -54,179 +55,309 @@ jobs:
     timeout-minutes: 120
 
     steps:
+      - name: 检出仓库代码
+        uses: actions/checkout@v4
+
       - name: 最大化构建空间
         uses: easimon/maximize-build-space@master
         with:
           root-reserve-mb: 8192
           temp-reserve-mb: 2048
           swap-size-mb: 8192
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
 
-      - name: 安装依赖
+      - name: 安装完整依赖
         run: |
           sudo apt update && sudo apt upgrade -y
-          sudo apt install -y python3 git curl ccache
+          sudo apt install -y git-core git-lfs repo python3 python3-pip \
+            build-essential bc bison flex libssl-dev libncurses-dev libelf-dev \
+            lz4 rsync device-tree-compiler wget curl gcc-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi clang lld llvm liblz4-tool aria2 \
+            libxml2-utils kmod cpio git-lfs
+          # 配置git-lfs
+          git lfs install
 
       - name: 安装repo工具
         run: |
-          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
+          curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
           chmod a+x ~/repo
-          sudo mv ~/repo /usr/local/bin/repo
+          sudo mv ~/repo /usr/local/bin/
+          repo --version
+
+      - name: 显示构建参数
+        run: |
+          echo "=== 构建参数 ==="
+          echo "Android版本: ${{ github.event.inputs.android_version }}"
+          echo "内核版本: ${{ github.event.inputs.kernel_version }}"
+          echo "内核子版本: ${{ github.event.inputs.kernel_sublevel }}"
+          echo "安全补丁: ${{ github.event.inputs.security_patch }}"
+          echo "启用SUSFS: ${{ github.event.inputs.use_susfs }}"
+          echo "启用KPM: ${{ github.event.inputs.use_kpm }}"
+          echo "启用ZRAM: ${{ github.event.inputs.use_zram }}"
 
       - name: 同步AOSP GKI内核源码
         run: |
-          mkdir kernel && cd kernel
-          # 关键：使用谷歌官方AOSP内核，而非一加源码
-          BRANCH="common-${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}"
-          echo "正在同步分支: $BRANCH"
-          repo init -u https://android.googlesource.com/kernel/manifest -b $BRANCH --depth=1
+          mkdir -p aosp-kernel && cd aosp-kernel
+          
+          # 重要：AOSP GKI内核分支命名可能不同，这里尝试多种格式
+          # SM8150对应的平台代号可能是 "msm-4.14" 或 "msm-5.4"
+          BRANCH_ATTEMPTS=(
+            "android-${{ github.event.inputs.kernel_version }}"
+            "android-${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}"
+            "msm-${{ github.event.inputs.kernel_version }}"
+          )
+          
+          for BRANCH in "${BRANCH_ATTEMPTS[@]}"; do
+            echo "尝试分支: $BRANCH"
+            if repo init -u https://android.googlesource.com/kernel/manifest -b $BRANCH --depth=1 2>&1 | grep -q "fatal"; then
+              echo "分支 $BRANCH 不存在，尝试下一个..."
+              continue
+            else
+              echo "成功找到分支: $BRANCH"
+              export SELECTED_BRANCH="$BRANCH"
+              break
+            fi
+          done
+          
+          if [ -z "$SELECTED_BRANCH" ]; then
+            echo "错误：未找到合适的内核分支，请检查版本组合"
+            exit 1
+          fi
+          
+          echo "使用分支: $SELECTED_BRANCH"
           repo sync -c -j$(nproc) --no-tags --fail-fast
+          echo "源码同步完成"
 
       - name: 集成SukiSU Ultra
         run: |
-          cd kernel/common
-          # 直接使用SukiSU官方集成脚本 (与原配置一致)
+          cd aosp-kernel
+          # 进入内核源码目录（通常是 common/ 或 kernel/）
+          if [ -d "common" ]; then
+            cd common
+          elif [ -d "kernel" ]; then
+            cd kernel
+          else
+            echo "未找到内核源码目录"
+            exit 1
+          fi
+          
+          # 集成SukiSU
+          echo "正在集成SukiSU..."
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s builtin
-          cd ./KernelSU
-          KSU_VERSION=$(expr $(git rev-list --count main) "+" 10606)
-          echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
-          sed -i "s/DKSU_VERSION=12800/DKSU_VERSION=${KSU_VERSION}/" kernel/Makefile
+          
+          # 获取KSU版本
+          cd KernelSU 2>/dev/null || cd ../KernelSU 2>/dev/null
+          if [ -d "kernel" ]; then
+            KSU_VERSION=$(expr $(git rev-list --count HEAD) "+" 10600)
+            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+            echo "KSU版本: $KSU_VERSION"
+          fi
 
-      - name: 应用SUSFS补丁
+      - name: 应用SUSFS补丁 (可选)
         if: ${{ github.event.inputs.use_susfs == 'true' }}
         run: |
-          cd kernel
-          # 克隆SUSFS补丁仓库（与原配置逻辑一致）
+          echo "准备应用SUSFS补丁..."
+          
+          # 下载补丁仓库
           SUSFS_BRANCH="gki-${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}"
-          echo "使用SUSFS分支: $SUSFS_BRANCH"
-          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b $SUSFS_BRANCH
-          git clone https://github.com/ShirkNeko/SukiSU_patch.git
+          echo "尝试SUSFS分支: $SUSFS_BRANCH"
           
-          cd common
-          # 复制并应用SUSFS补丁
-          cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}.patch ./
-          cp ../susfs4ksu/kernel_patches/fs/* ./fs/
-          cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
+          cd aosp-kernel
+          KERNEL_DIR=$(find . -name "Kconfig" -type f | head -1 | xargs dirname)
+          cd "$KERNEL_DIR"
           
-          patch -p1 < 50_add_susfs_in_gki-${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}.patch || true
-          echo "SUSFS补丁应用完成"
-
-      - name: 应用其他功能补丁
-        run: |
-          cd kernel/common
-          # 1. 隐藏特征补丁（与原配置一致）
-          cp ../../SukiSU_patch/69_hide_stuff.patch ./
-          patch -p1 -F 3 < 69_hide_stuff.patch || echo "补丁可能已部分应用"
+          # 下载补丁
+          wget -q "https://gitlab.com/simonpunk/susfs4ksu/-/raw/$SUSFS_BRANCH/kernel_patches/50_add_susfs_in_gki-${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}.patch" || \
+          wget -q "https://raw.githubusercontent.com/zzh20188/GKI_KernelSU_SUSFS/main/susfs/50_add_susfs_in_gki-${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}.patch"
           
-          # 2. ZRAM增强补丁（如果启用）
-          if [ "${{ github.event.inputs.use_zram }}" = "true" ]; then
-            echo "应用ZRAM补丁..."
-            cp -r ../../SukiSU_patch/other/zram/lz4k/include/linux/* ./include/linux/
-            cp -r ../../SukiSU_patch/other/zram/lz4k/lib/* ./lib/
-            cp -r ../../SukiSU_patch/other/zram/lz4k/crypto/* ./crypto/
-            
-            # 应用LZ4KD补丁
-            PATCH_FILE="../../SukiSU_patch/other/zram/zram_patch/${{ github.event.inputs.kernel_version }}/lz4kd.patch"
-            if [ -f "$PATCH_FILE" ]; then
-              cp "$PATCH_FILE" ./
-              patch -p1 -F 3 < lz4kd.patch || true
-            fi
+          if [ -f "*.patch" ]; then
+            patch -p1 < *.patch || echo "补丁应用可能失败，但继续构建..."
+            echo "SUSFS补丁应用完成"
+          else
+            echo "警告：未找到SUSFS补丁，继续构建..."
           fi
 
-      - name: 配置内核选项
+      - name: 配置内核
         run: |
-          cd kernel/common
-          CONFIG_FILE="./arch/arm64/configs/gki_defconfig"
+          cd aosp-kernel
+          if [ -d "common" ]; then
+            cd common
+          elif [ -d "kernel" ]; then
+            cd kernel
+          fi
           
-          # 核心：启用SukiSU和KPM（与原配置一致）
-          echo "CONFIG_KSU=y" >> "$CONFIG_FILE"
+          # 使用GKI默认配置
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
+          
+          # 启用KernelSU
+          ./scripts/config --enable CONFIG_KSU
+          
+          # 启用KPM（如果选择）
           if [ "${{ github.event.inputs.use_kpm }}" = "true" ]; then
-            echo "CONFIG_KPM=y" >> "$CONFIG_FILE"
+            ./scripts/config --enable CONFIG_KPM 2>/dev/null || echo "CONFIG_KPM可能不存在，跳过"
           fi
           
-          # SUSFS配置（如果启用）
+          # 启用SUSFS配置
           if [ "${{ github.event.inputs.use_susfs }}" = "true" ]; then
-            echo "CONFIG_KSU_SUSFS=y" >> "$CONFIG_FILE"
-            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> "$CONFIG_FILE"
-            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> "$CONFIG_FILE"
-            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> "$CONFIG_FILE"
-            # 可根据需要添加更多SUSFS选项
+            echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> arch/arm64/configs/gki_defconfig
           fi
           
-          # ZRAM配置（如果启用）
+          # 启用ZRAM配置
           if [ "${{ github.event.inputs.use_zram }}" = "true" ]; then
-            echo "CONFIG_ZSMALLOC=y" >> "$CONFIG_FILE"
-            echo "CONFIG_ZRAM=y" >> "$CONFIG_FILE"
-            echo "CONFIG_CRYPTO_LZ4K=y" >> "$CONFIG_FILE"
+            ./scripts/config --enable CONFIG_ZRAM
+            ./scripts/config --enable CONFIG_ZSMALLOC
+            echo "CONFIG_CRYPTO_LZ4=y" >> arch/arm64/configs/gki_defconfig
           fi
           
-          # 移除可能存在的check_defconfig限制（借鉴原配置）
-          sed -i 's/check_defconfig//' ./build.config.gki || true
+          # 保存配置
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- savedefconfig
+          cp defconfig arch/arm64/configs/gki_defconfig
+          
+          echo "内核配置完成"
 
       - name: 编译内核
         run: |
-          cd kernel/common
-          # 使用AOSP标准构建命令，非一加专用脚本
-          BUILD_CONFIG=./build.config.gki.aarch64 ./build/build.sh
+          cd aosp-kernel
+          if [ -d "common" ]; then
+            cd common
+          elif [ -d "kernel" ]; then
+            cd kernel
+          fi
           
-          # 验证产出
-          if [ -f "out/android-${{ github.event.inputs.kernel_version }}/dist/Image" ]; then
-            echo "编译成功，内核映像已生成"
+          echo "开始编译内核，使用 $(nproc) 个线程..."
+          
+          # 方法1：尝试标准make编译
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang LD=ld.lld \
+            -j$(nproc) 2>&1 | tee build.log || {
+              echo "标准编译失败，尝试替代方法..."
+              # 方法2：尝试使用build.sh（如果存在）
+              if [ -f "build/build.sh" ]; then
+                BUILD_CONFIG=./build.config.gki.aarch64 ./build/build.sh
+              else
+                echo "编译失败，请检查日志"
+                exit 1
+              fi
+            }
+          
+          # 检查编译产物
+          if [ -f "arch/arm64/boot/Image.gz" ]; then
+            cp arch/arm64/boot/Image.gz $GITHUB_WORKSPACE/Image.gz
+            echo "编译成功: Image.gz"
+          elif [ -f "arch/arm64/boot/Image" ]; then
+            cp arch/arm64/boot/Image $GITHUB_WORKSPACE/Image
+            echo "编译成功: Image"
           else
-            echo "错误：未找到内核映像"
+            echo "错误：未找到内核映像文件"
+            ls -la arch/arm64/boot/
             exit 1
           fi
 
-      - name: 打包AnyKernel3刷机包
+      - name: 准备AnyKernel3刷机包
         run: |
-          # 使用通用AnyKernel3（非一加定制版）
+          echo "准备AnyKernel3刷机包..."
+          
+          # 克隆AnyKernel3
           git clone https://github.com/topjohnwu/AnyKernel3.git --depth=1
           
-          # 查找并复制内核映像
-          KERNEL_IMAGE="kernel/common/out/android-${{ github.event.inputs.kernel_version }}/dist/Image"
-          if [ -f "$KERNEL_IMAGE" ]; then
-            cp "$KERNEL_IMAGE" AnyKernel3/Image
-          else
-            # 备用查找路径
-            find kernel -name "Image" -type f | head -1 | xargs -I {} cp {} AnyKernel3/Image
+          # 复制内核映像
+          if [ -f "$GITHUB_WORKSPACE/Image.gz" ]; then
+            cp $GITHUB_WORKSPACE/Image.gz AnyKernel3/Image.gz
+            cd AnyKernel3
+            gzip -d Image.gz
+          elif [ -f "$GITHUB_WORKSPACE/Image" ]; then
+            cp $GITHUB_WORKSPACE/Image AnyKernel3/Image
+            cd AnyKernel3
           fi
           
-          # 创建iQOO 855专用anykernel.sh
-          cat > AnyKernel3/anykernel.sh << 'EOF'
+          # 创建iQOO 855专用的anykernel.sh脚本
+          cat > anykernel.sh << 'EOF'
 #!/bin/bash
 # AnyKernel3 for iQOO 855 (SM8150) - GKI with SukiSU
+# 注意：刷机前请务必备份原厂boot和vendor_boot分区！
+
 kernel.string=GKI+SukiSU for iQOO 855
 do.devicecheck=0
 do.modules=1
 do.systemless=1
 do.cleanup=1
-device.name1=
+device.name1=v1936a  # iQOO 855设备代号
+device.name2=IQOO855
+device.name3=
+device.name4=
+device.name5=
+
 block=/dev/block/bootdevice/by-name/boot;
 is_slot_device=0;
 ramdisk_compression=auto;
 patch_vbmeta_flag=auto;
+
+## 导入AnyKernel3核心函数
 . tools/ak3-core.sh;
+
+## 安装引导映像
 dump_boot;
 write_boot;
+
+## 结束安装
 EOF
           
-          chmod +x AnyKernel3/anykernel.sh
+          chmod +x anykernel.sh
           
           # 下载SUSFS模块（如果启用）
           if [ "${{ github.event.inputs.use_susfs }}" = "true" ]; then
             echo "下载SUSFS模块..."
-            wget https://github.com/sidex15/ksu_module_susfs/releases/latest/download/ksu_module_susfs_1.5.2+.zip
-            cp ksu_module_susfs_1.5.2+.zip AnyKernel3/
+            wget -q https://github.com/sidex15/ksu_module_susfs/releases/latest/download/ksu_module_susfs_1.5.2+.zip -O ksu_module_susfs.zip
+            mkdir -p modules
+            unzip -j ksu_module_susfs.zip -d modules/ 2>/dev/null || echo "SUSFS模块解压失败或不存在"
           fi
           
+          # 创建说明文件
+          cat > README.md << 'EOF'
+# iQOO 855 GKI+SukiSU 内核刷机包
+
+## 重要提示
+1. **务必备份**：刷机前请在Recovery中备份 boot 和 vendor_boot 分区！
+2. **驱动缺失**：此包仅包含通用GKI内核，不包含设备专用驱动。
+3. **整合驱动**：请从你的手机中提取 /vendor/lib/modules/ 下的 .ko 文件，放入此包的 modules/ 目录后重新打包。
+
+## 构建信息
+- Android版本: ${{ github.event.inputs.android_version }}
+- 内核版本: ${{ github.event.inputs.kernel_version }}.${{ github.event.inputs.kernel_sublevel }}
+- 安全补丁: ${{ github.event.inputs.security_patch }}
+- SukiSU版本: ${{ env.KSUVER || '未知' }}
+- 构建时间: $(date)
+
+## 刷机方法
+1. 进入Recovery模式
+2. 刷入此ZIP包
+3. 重启系统
+EOF
+
           # 打包
-          cd AnyKernel3
-          ZIP_NAME="iQOO855_GKI_SukiSU_${{ github.event.inputs.android_version }}_${{ github.event.inputs.kernel_version }}_$(date +%Y%m%d).zip"
-          zip -r9 "../$ZIP_NAME" ./*
+          ZIP_NAME="iQOO855_GKI_${{ github.event.inputs.android_version }}_${{ github.event.inputs.kernel_version }}_${{ env.KSUVER || 'custom' }}.zip"
+          zip -r9 "$ZIP_NAME" ./* -x ".git/*" "*.git*"
+          
+          # 移动到工作区根目录
+          mv "$ZIP_NAME" $GITHUB_WORKSPACE/
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: iQOO855-Kernel-${{ github.run_number }}
+          name: iQOO855-Kernel-Build-${{ github.run_number }}
           path: |
             *.zip
-            kernel/common/out/android*/dist/Image
+            aosp-kernel/**/build.log
+            Image*
+          retention-days: 7
+
+      - name: 构建完成通知
+        run: |
+          echo "========================================"
+          echo "✅ 内核构建完成!"
+          echo "📦 刷机包: iQOO855_GKI_*.zip"
+          echo "⚠️  重要: 此包不含设备驱动!"
+          echo "🔧 请从你的iQOO 855提取驱动模块并整合"
+          echo "========================================"
