@@ -1,97 +1,29 @@
-name: Build SM8150 Kernel with KernelSU
-
-on:
-  workflow_dispatch:
-    inputs:
-      KERNEL_VERSION:
-        description: '内核版本'
-        required: true
-        default: '4.14.190-perf+'
-      KERNELSU_VERSION:
-        description: 'KernelSU版本 (如 main, v0.5.2)'
-        required: true
-        default: 'main'
-      BUILD_MODE:
-        description: '构建模式'
-        required: true
-        type: choice
-        default: 'release'
-        options:
-          - 'release'
-          - 'debug'
-          - 'permissive'
-
+# .github/workflows/build.yml 示例
+name: Kernel Build
+on: [push, pull_request]
 
 jobs:
-  build-kernel:
-    name: Build SM8150 Kernel with KernelSU
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
-    env:
-      KERNEL_VERSION: ${{ github.event.inputs.KERNEL_VERSION }}
-      KERNELSU_VERSION: ${{ github.event.inputs.KERNELSU_VERSION }}
-      BUILD_MODE: ${{ github.event.inputs.BUILD_MODE }}
-      KERNEL_SRC_DIR: "${{ github.workspace }}/kernel-src"
-      OUTPUT_DIR: "${{ github.workspace }}/output"
-      GOOGLE_KERNEL_REPO: "https://android.googlesource.com/kernel/manifest"
-      GOOGLE_KERNEL_BRANCH: "common-android13-4.14"
-      CCACHE_DIR: "${{ github.workspace }}/.ccache"
-
     steps:
-      - name: 📋 Check Workflow Inputs
-        run: |
-          echo "=== Workflow Inputs ==="
-          echo "Kernel Version: $KERNEL_VERSION"
-          echo "KernelSU Version: $KERNELSU_VERSION"
-          echo "Build Mode: $BUILD_MODE"
-          echo "========================"
-
-      - name: 📥 Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: 🧹 Clean and Optimize Environment
-        run: |
-          # Clean system package cache
-          sudo apt clean
-          sudo apt autoremove -y --purge
-          
-          # Remove large unused packages
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/share/swift
-          
-          # Show disk and memory usage
-          echo "=== System Status ==="
-          df -h
-          free -h
-
-      - name: 📦 Setup Build Dependencies
-        run: |
-          set -euo pipefail
-          
-          echo "=== Installing Build Dependencies ==="
-          
-          # Update package list
-          sudo apt-get update -y
-          
-          # Install core dependencies for kernel build
-          sudo apt-get install -y --no-install-recommends \
-            build-essential bc bison flex libssl-dev libelf-dev \
-            libncurses-dev liblz4-tool lz4 rsync device-tree-compiler \
-            gcc-aarch64-linux-gnu clang-14 lld-14 llvm-14 \
-            git git-lfs curl wget unzip aria2 ccache \
-            python3 python3-pip xxd
-          
-          # Install repo tool
-          curl -sSf https://storage.googleapis.com/git-repo-downloads/repo -o /tmp/repo
-          chmod a+x /tmp/repo
-          sudo mv /tmp/repo /usr/local/bin/repo
-          
-          # Show tool versions
-          echo "=== Tool Versions ==="
-          clang-14 --version || true
-          gcc-aarch64-linux-gnu --version || true
-          repo --version
-          make --version
-          python3 --version
+    - uses: actions/checkout@v2
+    
+    - name: Setup Environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential ...
+        
+    - name: Build Kernel
+      run: |
+        export ARCH=arm64
+        make sm8150_defconfig
+        make -j$(nproc)
+        
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v2
+      with:
+        name: kernel-images
+        path: arch/arm64/boot/          python3 --version
 
       - name: 💾 Setup CCache
         uses: actions/cache@v4
