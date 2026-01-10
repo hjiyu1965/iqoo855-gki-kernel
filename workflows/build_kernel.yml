@@ -1,1 +1,242 @@
+name: Build GKI Kernel for iQOO 855
 
+on:
+  workflow_dispatch:  # 允许手动触发
+    inputs:
+      android_version:
+        description: 'Android版本'
+        required: true
+        type: choice
+        default: 'android13'
+        options:
+          - 'android12'
+          - 'android13'
+          - 'android14'
+      kernel_version:
+        description: '内核版本 (通过adb shell uname -r获取，如4.14.199+则填写4.14)'
+        required: true
+        type: choice
+        default: '4.14'
+        options:
+          - '4.14'
+          - '4.19'
+          - '5.4'
+          - '5.10'
+          - '5.15'
+          - '6.1'
+      sub_level:
+        description: '内核子版本 (如4.14.199+则填写199)'
+        required: true
+        type: string
+        default: '199'
+      os_patch_level:
+        description: '安全补丁日期 (格式: YYYY-MM-DD)'
+        required: true
+        type: string
+        default: '2024-01-05'
+      kernelsu_variant:
+        description: 'KernelSU变体'
+        required: true
+        type: choice
+        default: 'SukiSU'
+        options:
+          - 'Official'
+          - 'Next'
+          - 'MKSU'
+          - 'SukiSU'
+      kernelsu_branch:
+        description: 'KernelSU分支'
+        required: true
+        type: choice
+        default: 'Dev(开发)'
+        options:
+          - 'Stable(标准)'
+          - 'Dev(开发)'
+      use_zram:
+        description: '启用ZRAM增强'
+        required: true
+        type: boolean
+        default: false
+      use_kpm:
+        description: '启用KPM'
+        required: true
+        type: boolean
+        default: true
+      build_method:
+        description: '构建方式'
+        required: true
+        type: choice
+        default: 'gki'
+        options:
+          - 'gki'
+          - 'perf'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    
+    steps:
+      - name: 检出仓库代码
+        uses: actions/checkout@v4
+        
+      - name: 最大化构建空间
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 5120
+          temp-reserve-mb: 2048
+          swap-size-mb: 4096
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          
+      - name: 安装编译依赖
+        run: |
+          sudo apt update && sudo apt upgrade -y
+          sudo apt install -y git-core git-lfs python3 python3-pip \
+            build-essential bc bison flex libssl-dev libncurses-dev \
+            libelf-dev lz4 rsync device-tree-compiler wget curl \
+            gcc-aarch64-linux-gnu clang lld llvm liblz4-tool
+          pip3 install pyelftools
+          
+      - name: 安装repo工具
+        run: |
+          curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
+          chmod a+x ~/repo
+          sudo mv ~/repo /usr/local/bin/
+          
+      - name: 显示选择的参数
+        run: |
+          echo "Android版本: ${{ github.event.inputs.android_version }}"
+          echo "内核版本: ${{ github.event.inputs.kernel_version }}"
+          echo "内核子版本: ${{ github.event.inputs.sub_level }}"
+          echo "安全补丁: ${{ github.event.inputs.os_patch_level }}"
+          echo "KernelSU变体: ${{ github.event.inputs.kernelsu_variant }}"
+          
+      - name: 初始化并同步内核源码
+        run: |
+          mkdir kernel && cd kernel
+          repo init -u https://android.googlesource.com/kernel/manifest \
+            -b common-${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }} \
+            --depth=1
+          repo sync -c -j$(nproc) --no-tags --fail-fast
+          
+      - name: 集成KernelSU
+        run: |
+          cd kernel/common
+          case "${{ github.event.inputs.kernelsu_variant }}" in
+            "Official")
+              curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
+              ;;
+            "SukiSU")
+              curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s builtin
+              ;;
+            "Next")
+              curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next-susfs/kernel/setup.sh" | bash -s next-susfs-dev
+              ;;
+            "MKSU")
+              curl -LSs "https://raw.githubusercontent.com/5ec1cff/KernelSU/main/kernel/supersetup.sh" | bash -s main
+              ;;
+          esac
+          
+      - name: 配置内核
+        run: |
+          cd kernel/common
+          # 使用GKI默认配置
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
+          
+          # 启用KernelSU
+          ./scripts/config --enable CONFIG_KSU
+          
+          # 如果选择了SukiSU且启用KPM
+          if [ "${{ github.event.inputs.kernelsu_variant }}" = "SukiSU" ] && [ "${{ github.event.inputs.use_kpm }}" = "true" ]; then
+            ./scripts/config --enable CONFIG_KPM
+          fi
+          
+          # 启用SUSFS支持
+          echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> arch/arm64/configs/gki_defconfig
+          
+          # 保存配置
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- savedefconfig
+          cp defconfig arch/arm64/configs/gki_defconfig
+          
+      - name: 编译内核
+        run: |
+          cd kernel/common
+          # 清理并编译
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang LD=ld.lld \
+            -j$(nproc) 2>&1 | tee build.log
+            
+          # 检查编译产物
+          if [ ! -f "arch/arm64/boot/Image.gz" ] && [ ! -f "arch/arm64/boot/Image" ]; then
+            echo "错误：未找到内核映像文件"
+            exit 1
+          fi
+          
+      - name: 准备AnyKernel3刷机包
+        run: |
+          # 克隆AnyKernel3
+          git clone https://github.com/topjohnwu/AnyKernel3.git --depth=1
+          
+          # 复制内核映像
+          if [ -f "kernel/common/arch/arm64/boot/Image.gz" ]; then
+            cp kernel/common/arch/arm64/boot/Image.gz AnyKernel3/Image.gz
+            # 解压为Image，因为AnyKernel3通常需要未压缩的Image
+            gzip -d AnyKernel3/Image.gz -c > AnyKernel3/Image
+            rm AnyKernel3/Image.gz
+          elif [ -f "kernel/common/arch/arm64/boot/Image" ]; then
+            cp kernel/common/arch/arm64/boot/Image AnyKernel3/Image
+          fi
+          
+          # 创建iQOO 855专用的anykernel.sh脚本
+          cat > AnyKernel3/anykernel.sh << 'EOF'
+#!/bin/bash
+# AnyKernel3 for iQOO 855 (SM8150)
+# 作者: 自定义构建
+
+## 任何内核设置
+kernel.string=GKI Kernel for iQOO 855 by $USER
+do.devicecheck=0
+do.modules=0          # 设为0，我们将在刷机后手动处理模块
+do.systemless=1
+do.cleanup=1
+do.cleanuponabort=0
+device.name1=v1936a   # iQOO 855设备代号
+device.name2=I855     # 备用名称
+device.name3=
+device.name4=
+device.name5=
+
+## 安装前设置
+block=/dev/block/bootdevice/by-name/boot;
+is_slot_device=0;
+ramdisk_compression=auto;
+patch_vbmeta_flag=auto;
+
+## 导入/包含函数与设置
+. tools/ak3-core.sh;
+
+## 安装引导映像
+dump_boot;
+write_boot;
+
+## 结束任何内核设置
+EOF
+          
+          chmod +x AnyKernel3/anykernel.sh
+          
+          # 打包
+          cd AnyKernel3
+          ZIP_NAME="iQOO855_GKI_${{ github.event.inputs.android_version }}_${{ github.event.inputs.kernel_version }}_${{ github.event.inputs.kernelsu_variant }}.zip"
+          zip -r9 ../$ZIP_NAME ./*
+          
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-build-${{ github.run_number }}
+          path: |
+            kernel/common/arch/arm64/boot/Image*
+            *.zip
+            kernel/common/build.log
