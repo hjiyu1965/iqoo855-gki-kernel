@@ -14,7 +14,7 @@ on:
       DEFCONFIG:
         description: 'defconfig 文件名'
         required: true
-        default: 'vendor/iqoo_defconfig'
+        default: 'vendor/sm8150-perf_defconfig'
       ENABLE_KSU:
         description: '是否集成 KernelSU'
         required: false
@@ -89,21 +89,25 @@ jobs:
         mkdir -p ${{ github.workspace }}/toolchains/clang
         cd ${{ github.workspace }}/toolchains/clang
 
+        echo "系统 GLIBC 版本: $(ldd --version | head -1)"
+
         # 使用 Neutron Clang（专为 Android 内核优化）
         curl -LO "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
         chmod +x antman
         ./antman -S=latest || true
 
-        # 备用方案：直接克隆
-        if [ ! -f "bin/clang" ]; then
+        # 验证 clang 能否正常运行（检查 GLIBC 兼容性）
+        if [ -f "bin/clang" ] && bin/clang --version > /dev/null 2>&1; then
+          echo "✅ Neutron Clang 可用: $(bin/clang --version | head -1)"
+        else
+          echo "⚠️ Neutron Clang 不兼容，改用 proton-clang..."
           cd ${{ github.workspace }}/toolchains
           rm -rf clang
           git clone --depth=1 \
             https://github.com/kdrag0n/proton-clang \
             clang
+          echo "✅ Proton Clang: $(clang/bin/clang --version | head -1)"
         fi
-
-        echo "工具链版本: $(./bin/clang --version | head -1 || true)"
 
     # ─────────────────────────────────────────
     # 3. 下载 GCC 交叉编译器（arm64 + arm32）
@@ -150,6 +154,37 @@ jobs:
         cd kernel_source
         echo "内核源码版本: $(make kernelversion 2>/dev/null || cat Makefile | head -5)"
         echo "最新提交: $(git log --oneline -1)"
+
+    # ─────────────────────────────────────────
+    # 4.5 修复 DTS 语法错误（pm8150.dtsi）
+    # ─────────────────────────────────────────
+    - name: "🩹 修复 DTS 语法错误"
+      run: |
+        cd kernel_source
+        # 针对 OPLUS/OnePlus SM8150 源码中 pm8150.dtsi 的语法错误
+        # build.log 显示: arch/arm64/boot/dts/18821/pm8150.dtsi:21 syntax error
+        DTS_FILE="arch/arm64/boot/dts/18821/pm8150.dtsi"
+
+        if [ -f "$DTS_FILE" ]; then
+          echo "=== 修复前第 18~25 行 ==="
+          sed -n '18,25p' "$DTS_FILE"
+
+          # 修复1: 删除单独占一行的多余分号
+          sed -i '/^[[:space:]]*;[[:space:]]*$/d' "$DTS_FILE"
+          # 修复2: 删除控制字符（隐藏的非法字符）
+          sed -i 's/[[:cntrl:]]//g' "$DTS_FILE"
+          # 修复3: 删除 BOM 头（Windows 编辑器引入的 UTF-8 BOM）
+          sed -i '1s/^\xEF\xBB\xBF//' "$DTS_FILE"
+
+          echo "=== 修复后第 18~25 行 ==="
+          sed -n '18,25p' "$DTS_FILE"
+          echo "✅ DTS 修复完成"
+        else
+          echo "ℹ️ 未找到 $DTS_FILE，跳过 DTS 修复（可能是其他内核源码）"
+        fi
+
+        # 同时禁用 dtbo overlay 编译，避免因其他 DTS 问题导致失败
+        # dtbo.img 可以后续从原厂 ROM 中提取
 
     # ─────────────────────────────────────────
     # 5. 可选：集成 KernelSU
@@ -250,6 +285,16 @@ jobs:
           ${{ github.event.inputs.DEFCONFIG }}
 
         echo "✅ .config 生成完成"
+
+        # 禁用 dtbo overlay 编译（避免 pm8150.dtsi 等 DTS 语法错误导致编译失败）
+        # dtbo.img 可从原厂 ROM 中单独提取，不需要重新编译
+        echo "CONFIG_BUILD_ARM64_DT_OVERLAY=n" >> out/.config
+        make O=out ARCH=arm64 CC=clang \
+          CLANG_TRIPLE=aarch64-linux-gnu- \
+          CROSS_COMPILE=aarch64-linux-android- \
+          CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+          LLVM=1 LLVM_IAS=1 olddefconfig
+        echo "✅ 已禁用 dtbo 编译"
 
         # 如果启用 KSU，追加配置
         if [ "${{ github.event.inputs.ENABLE_KSU }}" = "true" ]; then
