@@ -1,4 +1,4 @@
-name: Build Kernel for iQOO 855 (SM8150)
+name: Build Kernel 
 
 on:
   workflow_dispatch:
