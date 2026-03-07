@@ -1,0 +1,432 @@
+name: Build Kernel for iQOO 855 (SM8150)
+
+on:
+  workflow_dispatch:
+    inputs:
+      KERNEL_SOURCE:
+        description: '内核源码仓库地址'
+        required: true
+        default: 'https://git.codelinaro.org/clo/la/kernel/msm-4.14.git'
+      KERNEL_BRANCH:
+        description: '内核源码分支/标签'
+        required: true
+        default: 'LA.UM.8.1.r1-15600-sm8150.0'
+      DEFCONFIG:
+        description: 'defconfig 文件名'
+        required: true
+        default: 'vendor/sm8150-perf_defconfig'
+      ENABLE_KSU:
+        description: '是否集成 KernelSU'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      ENABLE_LTO:
+        description: '是否启用 LTO 优化'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+env:
+  # ========== 工具链配置 ==========
+  CLANG_VERSION: "17"                    # Clang 版本
+  ARCH: arm64
+  SUBARCH: arm64
+
+  # ========== 编译信息 ==========
+  KBUILD_BUILD_USER: "GitHub-Actions"
+  KBUILD_BUILD_HOST: "iQOO855-Builder"
+
+  # ========== 产物配置 ==========
+  ANYKERNEL_REPO: "https://github.com/osm0sis/AnyKernel3"
+  ANYKERNEL_BRANCH: "master"
+
+jobs:
+  build:
+    name: Build SM8150 Kernel
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360   # 最长 6 小时
+
+    steps:
+
+    # ─────────────────────────────────────────
+    # 1. 初始化工作环境
+    # ─────────────────────────────────────────
+    - name: "⚙️ 初始化环境"
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends \
+          bc bison build-essential ca-certificates ccache \
+          curl flex g++-multilib gcc-multilib git gnupg \
+          libelf-dev libncurses5-dev libssl-dev libxml2 \
+          libxml2-utils lzop make pngcrush python3 \
+          rsync schedtool squashfs-tools unzip xsltproc \
+          zip zlib1g-dev
+
+        # 设置时区为上海
+        sudo timedatectl set-timezone Asia/Shanghai
+
+        echo "构建开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+
+    # ─────────────────────────────────────────
+    # 2. 缓存工具链（避免每次重新下载）
+    # ─────────────────────────────────────────
+    - name: "📦 缓存 Clang 工具链"
+      id: cache-clang
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/toolchains/clang
+        key: clang-${{ env.CLANG_VERSION }}-sm8150-v1
+
+    - name: "🔧 下载 Neutron Clang 工具链"
+      if: steps.cache-clang.outputs.cache-hit != 'true'
+      run: |
+        mkdir -p ${{ github.workspace }}/toolchains/clang
+        cd ${{ github.workspace }}/toolchains/clang
+
+        # 使用 Neutron Clang（专为 Android 内核优化）
+        curl -LO "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
+        chmod +x antman
+        ./antman -S=latest || true
+
+        # 备用方案：直接克隆
+        if [ ! -f "bin/clang" ]; then
+          cd ${{ github.workspace }}/toolchains
+          rm -rf clang
+          git clone --depth=1 \
+            https://github.com/kdrag0n/proton-clang \
+            clang
+        fi
+
+        echo "工具链版本: $(./bin/clang --version | head -1 || true)"
+
+    # ─────────────────────────────────────────
+    # 3. 下载 GCC 交叉编译器（arm64 + arm32）
+    # ─────────────────────────────────────────
+    - name: "📦 缓存 GCC 工具链"
+      id: cache-gcc
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/toolchains/gcc
+        key: gcc-aarch64-arm-android-v1
+
+    - name: "🔧 下载 GCC 工具链"
+      if: steps.cache-gcc.outputs.cache-hit != 'true'
+      run: |
+        mkdir -p ${{ github.workspace }}/toolchains/gcc
+
+        # aarch64 GCC（64位）
+        git clone --depth=1 \
+          https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 \
+          ${{ github.workspace }}/toolchains/gcc/aarch64 || \
+        git clone --depth=1 \
+          https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 \
+          ${{ github.workspace }}/toolchains/gcc/aarch64
+
+        # arm GCC（32位，用于 vDSO）
+        git clone --depth=1 \
+          https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 \
+          ${{ github.workspace }}/toolchains/gcc/arm || \
+        git clone --depth=1 \
+          https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 \
+          ${{ github.workspace }}/toolchains/gcc/arm
+
+    # ─────────────────────────────────────────
+    # 4. 拉取内核源码（CodeLinaro msm-4.14）
+    # ─────────────────────────────────────────
+    - name: "📥 拉取内核源码 (CodeLinaro msm-4.14)"
+      run: |
+        echo "📡 从 CodeLinaro 拉取 SM8150 内核源码..."
+        echo "仓库: ${{ github.event.inputs.KERNEL_SOURCE }}"
+        echo "标签: ${{ github.event.inputs.KERNEL_BRANCH }}"
+
+        git clone \
+          --depth=1 \
+          --single-branch \
+          --branch "${{ github.event.inputs.KERNEL_BRANCH }}" \
+          "${{ github.event.inputs.KERNEL_SOURCE }}" \
+          kernel_source
+
+        cd kernel_source
+        echo "内核版本: $(make kernelversion 2>/dev/null || head -5 Makefile)"
+        echo "最新提交: $(git log --oneline -1)"
+        echo "=== defconfig 检查 ==="
+        ls arch/arm64/configs/vendor/sm8150* 2>/dev/null || \
+        ls arch/arm64/configs/sm8150* 2>/dev/null || \
+        echo "⚠️ 未在标准路径找到 sm8150 defconfig，请确认"
+
+    # ─────────────────────────────────────────
+    # 5. 可选：集成 KernelSU
+    # ─────────────────────────────────────────
+    - name: "🔑 集成 KernelSU"
+      if: github.event.inputs.ENABLE_KSU == 'true'
+      run: |
+        cd kernel_source
+        echo "正在集成 KernelSU..."
+
+        curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
+
+        # 验证集成
+        if [ -d "KernelSU" ]; then
+          echo "✅ KernelSU 集成成功"
+          echo "KSU版本: $(cat KernelSU/VERSION 2>/dev/null || echo '未知')"
+        else
+          echo "❌ KernelSU 集成失败"
+          exit 1
+        fi
+
+    # ─────────────────────────────────────────
+    # 6. 配置 ccache
+    # ─────────────────────────────────────────
+    - name: "💾 配置 ccache"
+      uses: actions/cache@v4
+      with:
+        path: ~/.ccache
+        key: ccache-sm8150-${{ github.event.inputs.DEFCONFIG }}-${{ github.sha }}
+        restore-keys: |
+          ccache-sm8150-${{ github.event.inputs.DEFCONFIG }}-
+          ccache-sm8150-
+
+    - name: "⚡ 初始化 ccache"
+      run: |
+        ccache -M 8G
+        ccache --zero-stats
+        echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+
+    # ─────────────────────────────────────────
+    # 7. 配置编译参数
+    # ─────────────────────────────────────────
+    - name: "🛠️ 设置编译参数"
+      run: |
+        CLANG_BIN="${{ github.workspace }}/toolchains/clang/bin"
+        GCC64_BIN="${{ github.workspace }}/toolchains/gcc/aarch64/bin"
+        GCC32_BIN="${{ github.workspace }}/toolchains/gcc/arm/bin"
+
+        # 写入环境变量
+        echo "CLANG_BIN=${CLANG_BIN}" >> $GITHUB_ENV
+        echo "GCC64_BIN=${GCC64_BIN}" >> $GITHUB_ENV
+        echo "GCC32_BIN=${GCC32_BIN}" >> $GITHUB_ENV
+
+        # 完整 PATH（Clang 优先）
+        echo "BUILD_PATH=${CLANG_BIN}:${GCC64_BIN}:${GCC32_BIN}:/usr/bin:/bin" >> $GITHUB_ENV
+
+        # SM8150 编译标志
+        cat >> $GITHUB_ENV << 'EOF'
+        MAKE_FLAGS=ARCH=arm64 \
+          CC=clang \
+          CLANG_TRIPLE=aarch64-linux-gnu- \
+          CROSS_COMPILE=aarch64-linux-android- \
+          CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+          AR=llvm-ar \
+          NM=llvm-nm \
+          OBJCOPY=llvm-objcopy \
+          OBJDUMP=llvm-objdump \
+          STRIP=llvm-strip \
+          LD=ld.lld \
+          LLVM=1 \
+          LLVM_IAS=1
+        EOF
+
+        # 启用 LTO
+        if [ "${{ github.event.inputs.ENABLE_LTO }}" = "true" ]; then
+          echo "LTO_FLAGS=LTO=thin" >> $GITHUB_ENV
+          echo "✅ LTO 已启用"
+        fi
+
+        echo "构建线程数: $(nproc --all)"
+
+    # ─────────────────────────────────────────
+    # 8. 生成 .config
+    # ─────────────────────────────────────────
+    - name: "📋 生成内核配置"
+      run: |
+        cd kernel_source
+        export PATH="${BUILD_PATH}"
+
+        make O=out \
+          ARCH=arm64 \
+          CC=clang \
+          CLANG_TRIPLE=aarch64-linux-gnu- \
+          CROSS_COMPILE=aarch64-linux-android- \
+          CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+          LLVM=1 \
+          LLVM_IAS=1 \
+          ${{ github.event.inputs.DEFCONFIG }}
+
+        echo "✅ .config 生成完成"
+
+        # 如果启用 KSU，追加配置
+        if [ "${{ github.event.inputs.ENABLE_KSU }}" = "true" ]; then
+          echo "CONFIG_KSU=y" >> out/.config
+          echo "CONFIG_OVERLAY_FS=y" >> out/.config
+          make O=out ARCH=arm64 CC=clang olddefconfig
+        fi
+
+    # ─────────────────────────────────────────
+    # 9. 编译内核
+    # ─────────────────────────────────────────
+    - name: "🔨 编译内核"
+      run: |
+        cd kernel_source
+        export PATH="${BUILD_PATH}"
+
+        echo "开始编译... $(date '+%H:%M:%S')"
+
+        make -j$(nproc --all) O=out \
+          ARCH=arm64 \
+          CC="ccache clang" \
+          CLANG_TRIPLE=aarch64-linux-gnu- \
+          CROSS_COMPILE=aarch64-linux-android- \
+          CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+          AR=llvm-ar \
+          NM=llvm-nm \
+          OBJCOPY=llvm-objcopy \
+          OBJDUMP=llvm-objdump \
+          STRIP=llvm-strip \
+          LD=ld.lld \
+          LLVM=1 \
+          LLVM_IAS=1 \
+          ${{ env.LTO_FLAGS }} \
+          2>&1 | tee ../build.log
+
+        echo "编译完成: $(date '+%H:%M:%S')"
+
+        # 检查编译产物
+        echo ""
+        echo "===== 编译产物检查 ====="
+        ls -lh out/arch/arm64/boot/ || true
+
+    # ─────────────────────────────────────────
+    # 10. 验证编译产物
+    # ─────────────────────────────────────────
+    - name: "✅ 验证编译产物"
+      run: |
+        cd kernel_source
+
+        # 检查 Image 文件（尝试多种格式）
+        KERNEL_IMAGE=""
+        for img in Image.gz-dtb Image.gz Image Image-dtb; do
+          if [ -f "out/arch/arm64/boot/${img}" ]; then
+            KERNEL_IMAGE="${img}"
+            echo "✅ 找到内核镜像: ${img}"
+            echo "KERNEL_IMAGE=${img}" >> $GITHUB_ENV
+            break
+          fi
+        done
+
+        if [ -z "$KERNEL_IMAGE" ]; then
+          echo "❌ 未找到内核镜像，编译可能失败！"
+          echo "===== 编译日志最后 50 行 ====="
+          tail -50 ../build.log
+          exit 1
+        fi
+
+        # 检查 dtbo.img
+        if [ -f "out/arch/arm64/boot/dtbo.img" ]; then
+          echo "✅ 找到 dtbo.img"
+          echo "HAS_DTBO=true" >> $GITHUB_ENV
+        fi
+
+        # 打印 ccache 统计
+        echo ""
+        echo "===== ccache 统计 ====="
+        ccache --show-stats
+
+    # ─────────────────────────────────────────
+    # 11. 打包 AnyKernel3 刷机包
+    # ─────────────────────────────────────────
+    - name: "📦 打包 AnyKernel3 刷机包"
+      run: |
+        # 克隆 AnyKernel3
+        git clone --depth=1 \
+          ${{ env.ANYKERNEL_REPO }} \
+          -b ${{ env.ANYKERNEL_BRANCH }} \
+          AnyKernel3
+
+        # 修改 AnyKernel3 配置
+        cd AnyKernel3
+        sed -i 's/do.devicecheck=1/do.devicecheck=0/' anykernel.sh   # 关闭设备检查（调试用）
+        sed -i 's/is_slot_device=0/is_slot_device=1/' anykernel.sh   # iQOO 855 是 A/B 分区设备
+
+        # 复制内核镜像
+        cp ../kernel_source/out/arch/arm64/boot/${{ env.KERNEL_IMAGE }} ./
+
+        # 如有 dtbo 也一起打包
+        if [ "${{ env.HAS_DTBO }}" = "true" ]; then
+          cp ../kernel_source/out/arch/arm64/boot/dtbo.img ./
+        fi
+
+        # 生成刷机包文件名
+        KERNEL_NAME="Kernel-iQOO855-SM8150"
+        KSU_SUFFIX=""
+        if [ "${{ github.event.inputs.ENABLE_KSU }}" = "true" ]; then
+          KSU_SUFFIX="-KSU"
+        fi
+        ZIP_NAME="${KERNEL_NAME}${KSU_SUFFIX}-$(date +%Y%m%d-%H%M).zip"
+        echo "ZIP_NAME=${ZIP_NAME}" >> $GITHUB_ENV
+
+        # 打包
+        zip -r9 "../${ZIP_NAME}" . \
+          -x '*.git*' \
+          -x '*README*' \
+          -x '*.github*'
+
+        echo "✅ 刷机包生成: ${ZIP_NAME}"
+        ls -lh "../${ZIP_NAME}"
+
+    # ─────────────────────────────────────────
+    # 12. 上传产物
+    # ─────────────────────────────────────────
+    - name: "📤 上传内核镜像"
+      uses: actions/upload-artifact@v4
+      with:
+        name: "${{ env.KERNEL_IMAGE }}-iQOO855"
+        path: "kernel_source/out/arch/arm64/boot/${{ env.KERNEL_IMAGE }}"
+        retention-days: 7
+
+    - name: "📤 上传 dtbo（如有）"
+      if: env.HAS_DTBO == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: "dtbo-iQOO855"
+        path: "kernel_source/out/arch/arm64/boot/dtbo.img"
+        retention-days: 7
+
+    - name: "📤 上传 AnyKernel3 刷机包"
+      uses: actions/upload-artifact@v4
+      with:
+        name: "${{ env.ZIP_NAME }}"
+        path: "${{ env.ZIP_NAME }}"
+        retention-days: 14
+
+    - name: "📤 上传编译日志（仅失败时）"
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: "build-log-error"
+        path: "build.log"
+        retention-days: 3
+
+    # ─────────────────────────────────────────
+    # 13. 构建摘要
+    # ─────────────────────────────────────────
+    - name: "📊 构建摘要"
+      if: success()
+      run: |
+        echo "## ✅ iQOO 855 内核编译成功" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| 项目 | 内容 |" >> $GITHUB_STEP_SUMMARY
+        echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+        echo "| 设备 | iQOO 855 (SM8150) |" >> $GITHUB_STEP_SUMMARY
+        echo "| 内核镜像 | ${{ env.KERNEL_IMAGE }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| KernelSU | ${{ github.event.inputs.ENABLE_KSU }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| LTO | ${{ github.event.inputs.ENABLE_LTO }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| 刷机包 | ${{ env.ZIP_NAME }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| 构建时间 | $(date '+%Y-%m-%d %H:%M:%S') |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "刷机包可在 Actions 页面的 **Artifacts** 区域下载" >> $GITHUB_STEP_SUMMARY
