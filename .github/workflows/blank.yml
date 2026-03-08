@@ -1,0 +1,113 @@
+name: Build 4.19 GKI (clang-r353983c)
+
+on:
+  workflow_dispatch:
+    inputs:
+      KERNEL_SOURCE:
+        description: 内核源码
+        required: true
+        default: https://android.googource.com/kernel/common
+      KERNEL_BRANCH:
+        description: 内核分支
+        required: true
+        default: deprecated/android-4.19-gki-dev
+      DEFCONFIG:
+        description: defconfig
+        required: true
+        default: gki_defconfig
+      ENABLE_KSU:
+        description: 集成 KernelSU
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+env:
+  ARCH: arm64
+  CLANG_VER: clang-r353983c
+  ANYKERNEL_REPO: https://github.com/osm0sis/AnyKernel3
+  ANYKERNEL_BRANCH: master
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y bc bison build-essential flex libelf-dev libssl-dev make git zip ccache
+
+      # 缓存 clang-r353983c
+      - name: Cache clang-r353983c
+        id: cache-clang
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/${{ env.CLANG_VER }}
+          key: ${{ env.CLANG_VER }}-cache
+
+      # 下载谷歌官方 clang-r353983c
+      - name: Download clang-r353983c
+        if: steps.cache-clang.outputs.cache-hit != 'true'
+        run: |
+          cd ${{ github.workspace }}
+          wget -O ${{ env.CLANG_VER }}.tar.gz \
+            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/${{ env.CLANG_VER }}.tar.gz
+          mkdir -p ${{ env.CLANG_VER }}
+          tar -zxf ${{ env.CLANG_VER }}.tar.gz -C ${{ env.CLANG_VER }}
+
+      - name: Init ccache
+        run: ccache -M 4G && ccache --zero-stats
+
+      # 拉内核
+      - name: Clone kernel
+        run: |
+          git clone --depth=1 -b ${{ github.event.inputs.KERNEL_BRANCH }} \
+            ${{ github.event.inputs.KERNEL_SOURCE }} kernel
+
+      # 集成 KSU
+      - name: Integrate KernelSU
+        if: github.event.inputs.ENABLE_KSU == 'true'
+        run: |
+          cd kernel
+          curl -LSs https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh | bash -s main
+
+      # 生成 .config
+      - name: Make defconfig
+        run: |
+          export PATH=${{ github.workspace }}/${{ env.CLANG_VER }}/bin:$PATH
+          cd kernel
+          make ARCH=arm64 O=out ${{ github.event.inputs.DEFCONFIG }}
+
+      # 编译（只用 clang-r353983c）
+      - name: Compile kernel
+        run: |
+          export PATH=${{ github.workspace }}/${{ env.CLANG_VER }}/bin:$PATH
+          cd kernel
+          make -j$(nproc) ARCH=arm64 O=out \
+            CC="ccache clang" \
+            CROSS_COMPILE=aarch64-linux-android- \
+            LLVM=1 LLVM_IAS=1
+
+      # 检查镜像
+      - name: Check kernel image
+        run: ls -lh kernel/out/arch/arm64/boot/ && echo "IMAGE=Image.gz" >> $GITHUB_ENV
+
+      # 打包刷机包
+      - name: Pack AnyKernel3
+        run: |
+          git clone --depth=1 $ANYKERNEL_REPO -b $ANYKERNEL_BRANCH ak3
+          cp kernel/out/arch/arm64/boot/$IMAGE ak3/
+          cd ak3
+          zip -r9 Kernel-4.19-GKI-${{ env.CLANG_VER }}.zip . -x '.git*'
+          mv Kernel-4.19-GKI-${{ env.CLANG_VER }}.zip ${{ github.workspace }}/
+
+      # 上传
+      - name: Upload zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kernel-4.19-GKI-${{ env.CLANG_VER }}
+          path: Kernel-4.19-GKI-${{ env.CLANG_VER }}.zip
