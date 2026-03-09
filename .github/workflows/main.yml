@@ -51,7 +51,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build Kernel
-        uses: mlm-games/simple-kernel-build-action@v1
+        uses: mlm-games/simple-kernel-build-action@v1.1.0
         with:
           # 使用双引号包裹整个命令，内部双引号转义，避免YAML解析错误
           KERNEL_CLONE_CMD: "git clone ${{ github.event.inputs.kernel_repo || 'https://github.com/lineageos/android_kernel_xiaomi_msm8953' }} -b \"${{ github.event.inputs.kernel_branch || format('android {0}', github.event.inputs.android_version || '13.0') }}\""
@@ -63,7 +63,7 @@ jobs:
           AOSP_CLANG_VERSION: ${{ github.event.inputs.aosp_clang_version || 'r450784d' }}
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: kernel-build
           path: 'kernel_source/flashable-anykernel.zip'
