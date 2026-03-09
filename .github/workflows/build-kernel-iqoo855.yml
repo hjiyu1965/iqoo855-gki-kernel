@@ -1,99 +1,55 @@
-name: Android Kernel Automated Build
+name: KernelSU Kernel Build
 
 on:
-  push:
-    branches: [ main, develop ]
-    tags: [ 'v*' ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:  # 支持手动触发
-
-env:
-  ARCH: arm64
-  SUBARCH: arm64
-  KERNEL_VERSION: "5.15"
-  DEVICE_CONFIG: "vendor/device_defconfig"  # 替换为你的设备配置
+  workflow_dispatch:
+    inputs:
+      kernel_source:
+        description: 'Kernel source URL'
+        required: true
+        default: 'https://github.com/LineageOS/android_kernel_oneplus_sm8250'
+      kernel_branch:
+        description: 'Kernel branch'
+        required: true
+        default: 'lineage-20'
+      device_config:
+        description: 'Device defconfig'
+        required: true
+        default: 'vendor/kona-perf_defconfig'
+      ksu_version:
+        description: 'KernelSU version'
+        required: false
+        default: 'v0.9.5'
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    strategy:
-      matrix:
-        compiler: [ "clang", "gcc" ]  # 多编译器测试
-        include:
-          - compiler: clang
-            toolchain: "aosp-clang-r487747c"
-          - compiler: gcc
-            toolchain: "aosp-gcc-4.9"
     
     steps:
-      # 🔑 1. 代码检出（含子模块）
       - name: Checkout kernel source
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-
-      # 🛠️ 2. 环境准备（带缓存加速）
-      - name: Cache toolchain
-        uses: actions/cache@v3
-        with:
-          path: |
-            $HOME/toolchains
-            ~/.ccache
-          key: ${{ runner.os }}-toolchain-${{ matrix.toolchain }}-${{ hashFiles('.toolchain_version') }}
-      
-      - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y flex bison libssl-dev libelf-dev \
-            libncurses5-dev libncursesw5-dev dwarves liblz4-tool
-
-      # 📦 3. 工具链设置（根据矩阵动态选择）
-      - name: Setup ${{ matrix.compiler }} toolchain
+          git clone -b ${{ github.event.inputs.kernel_branch }} \
+            ${{ github.event.inputs.kernel_source }} kernel
+          cd kernel
+          
+      - name: Integrate KernelSU
         run: |
-          mkdir -p $HOME/toolchains/${{ matrix.toolchain }}
-          if [ "${{ matrix.compiler }}" == "clang" ]; then
-            wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/${{ matrix.toolchain }}.tar.gz -O clang.tar.gz
-            tar -xzf clang.tar.gz -C $HOME/toolchains/${{ matrix.toolchain }}
-          else
-            # GCC 工具链设置逻辑（根据实际项目调整）
-            echo "GCC setup placeholder"
-          fi
-          echo "$HOME/toolchains/${{ matrix.toolchain }}/bin" >> $GITHUB_PATH
-
-      # ⚙️ 4. 内核配置与编译
-      - name: Configure kernel
+          cd kernel
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | \
+            bash -s ${{ github.event.inputs.ksu_version }}
+          
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential ...
+        
+      - name: Build kernel
         run: |
-          make O=out ${{ env.DEVICE_CONFIG }}
-          # 可选：集成 KernelSU（参考 kernel_build_action 实践）
-          # if [ "${{ github.event_name }}" == "push" ]; then ./scripts/ksu.sh; fi
-      
-      - name: Build kernel image
-        run: |
-          export PATH=$HOME/toolchains/${{ matrix.toolchain }}/bin:$PATH
-          make -j$(nproc) O=out ARCH=${{ env.ARCH }} \
-            CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy \
-            Image.gz-dtb dtbo.img
-
-      # 📤 5. 产物归档与发布
-      - name: Upload build artifacts
+          cd kernel
+          export ARCH=arm64
+          export SUBARCH=arm64
+          make O=out ${{ github.event.inputs.device_config }}
+          make -j$(nproc) O=out Image.gz-dtb
+          
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-${{ matrix.compiler }}-${{ github.sha }}
-          path: |
-            out/arch/${{ env.ARCH }}/boot/Image.gz-dtb
-            out/arch/${{ env.ARCH }}/boot/dtbo.img
-            out/.config
-          retention-days: 7
-
-      # 🚀 6. 自动发布（仅限 tag 推送）
-      - name: Release kernel binaries
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            out/arch/${{ env.ARCH }}/boot/Image.gz-dtb
-            out/arch/${{ env.ARCH }}/boot/dtbo.img
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: kernel-with-ksu
+          path: kernel/out/arch/arm64/boot/Image.gz-dtb
