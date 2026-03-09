@@ -1,119 +1,103 @@
-name: KernelSU Kernel Build
+name: Build Kernel
 
 on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
   workflow_dispatch:
     inputs:
-      kernel_repo:
-        description: 'Kernel repository URL'
+      arch:
+        description: "Target architecture"
         required: true
-        default: 'https://github.com/LineageOS/android_kernel_oneplus_sm8250'
-      kernel_branch:
-        description: 'Kernel branch'
+        default: "arm64"
+      defconfig:
+        description: "Kernel defconfig"
         required: true
-        default: 'lineage-20'
-      device_defconfig:
-        description: 'Device defconfig file'
-        required: true
-        default: 'vendor/kona-perf_defconfig'
-      ksu_version:
-        description: 'KernelSU version (leave empty for latest)'
+        default: "defconfig"
+      cross_compile:
+        description: "Cross compile prefix"
         required: false
-        default: 'v0.9.5'
+        default: "aarch64-linux-gnu-"
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+
     env:
-      ARCH: arm64
-      SUBARCH: arm64
-      KERNEL_DIR: kernel
-      KSU_VERSION: ${{ github.event.inputs.ksu_version }}
+      ARCH: ${{ github.event.inputs.arch || 'arm64' }}
+      DEFCONFIG: ${{ github.event.inputs.defconfig || 'defconfig' }}
+      CROSS_COMPILE: ${{ github.event.inputs.cross_compile || 'aarch64-linux-gnu-' }}
+      OUT_DIR: out
 
     steps:
-      # 1️⃣ 检出代码（使用最新版 actions/checkout@v4）
-      - name: Checkout kernel source
+      - name: Checkout source
         uses: actions/checkout@v4
-        with:
-          repository: ${{ github.event.inputs.kernel_repo }}
-          ref: ${{ github.event.inputs.kernel_branch }}
-          path: ${{ env.KERNEL_DIR }}
-          submodules: recursive
 
-      # 2️⃣ 安装依赖
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y flex bison libssl-dev libelf-dev \
-            libncurses5-dev libncursesw5-dev dwarves liblz4-tool \
-            build-essential libncurses-dev libssl-dev libelf-dev
+          sudo apt-get install -y \
+            build-essential \
+            bc \
+            bison \
+            flex \
+            libssl-dev \
+            libelf-dev \
+            clang \
+            lld \
+            llvm \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu \
+            dwarves \
+            cpio \
+            pahole \
+            zip \
+            unzip \
+            python3 \
+            rsync
 
-      # 3️⃣ 集成 KernelSU（核心步骤）
-      - name: Integrate KernelSU
-        working-directory: ${{ env.KERNEL_DIR }}
+      - name: Show environment
         run: |
-          # 下载并执行官方 setup.sh 脚本
-          if [ -n "${{ env.KSU_VERSION }}" ]; then
-            echo "Installing KernelSU version: ${{ env.KSU_VERSION }}"
-            curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/${{ env.KSU_VERSION }}/kernel/setup.sh" | bash -
-          else
-            echo "Installing latest KernelSU"
-            curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
-          fi
-          
-          # 验证集成成功
-          if [ -d "drivers/staging/kernelsu" ]; then
-            echo "✓ KernelSU successfully integrated"
-            ls -la drivers/staging/kernelsu/
-          else
-            echo "✗ KernelSU integration failed!"
-            exit 1
-          fi
+          echo "ARCH=$ARCH"
+          echo "DEFCONFIG=$DEFCONFIG"
+          echo "CROSS_COMPILE=$CROSS_COMPILE"
+          mkdir -p "$OUT_DIR"
 
-      # 4️⃣ 配置内核（确保启用 KSU）
-      - name: Configure kernel
-        working-directory: ${{ env.KERNEL_DIR }}
+      - name: Clean output directory
         run: |
-          make O=out ARCH=${{ env.ARCH }} ${{ github.event.inputs.device_defconfig }}
-          
-          # 确保 KSU 配置已启用
-          scripts/config --file out/.config --set-val CONFIG_KSU y
-          scripts/config --file out/.config --set-val CONFIG_KPROBES y
-          scripts/config --file out/.config --set-val CONFIG_HAVE_KPROBES y
-          scripts/config --file out/.config --set-val CONFIG_KPROBE_EVENTS y
-          
-          make O=out ARCH=${{ env.ARCH }} olddefconfig
-          
-          # 验证配置
-          grep "CONFIG_KSU=" out/.config
+          rm -rf "$OUT_DIR"
+          mkdir -p "$OUT_DIR"
 
-      # 5️⃣ 编译内核
+      - name: Generate config
+        run: |
+          make O="$OUT_DIR" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" "$DEFCONFIG"
+
       - name: Build kernel
-        working-directory: ${{ env.KERNEL_DIR }}
         run: |
-          make -j$(nproc) O=out ARCH=${{ env.ARCH }} \
-            Image.gz-dtb dtbo.img modules
-          
-          # 验证编译产物
-          ls -lh out/arch/${{ env.ARCH }}/boot/
+          make O="$OUT_DIR" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" -j"$(nproc)"
 
-      # 6️⃣ 上传构建产物（使用 v4 版本！）
-      - name: Upload kernel artifacts
-        uses: actions/upload-artifact@v4  # ← 关键修复点
+      - name: Build modules
+        run: |
+          make O="$OUT_DIR" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" modules -j"$(nproc)" || true
+
+      - name: Package artifacts
+        run: |
+          mkdir -p artifacts
+          cp "$OUT_DIR/.config" artifacts/ || true
+          cp "$OUT_DIR/System.map" artifacts/ || true
+          cp "$OUT_DIR/vmlinux" artifacts/ || true
+          cp "$OUT_DIR/arch/$ARCH/boot/Image" artifacts/ || true
+          cp "$OUT_DIR/arch/$ARCH/boot/Image.gz" artifacts/ || true
+          cp "$OUT_DIR/arch/$ARCH/boot/bzImage" artifacts/ || true
+          find "$OUT_DIR" -name "*.dtb" -exec cp {} artifacts/ \; || true
+          find "$OUT_DIR" -name "*.dtbo" -exec cp {} artifacts/ \; || true
+          tar -czf kernel-artifacts.tar.gz artifacts || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: kernel-with-ksu-${{ github.sha }}
+          name: kernel-${{ env.ARCH }}-artifacts
           path: |
-            ${{ env.KERNEL_DIR }}/out/arch/${{ env.ARCH }}/boot/Image.gz-dtb
-            ${{ env.KERNEL_DIR }}/out/arch/${{ env.ARCH }}/boot/dtbo.img
-            ${{ env.KERNEL_DIR }}/out/.config
-          retention-days: 7
-
-      # 7️⃣ （可选）发布到 Release
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            ${{ env.KERNEL_DIR }}/out/arch/${{ env.ARCH }}/boot/Image.gz-dtb
-            ${{ env.KERNEL_DIR }}/out/arch/${{ env.ARCH }}/boot/dtbo.img
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            artifacts
+            kernel-artifacts.tar.gz
+          if-no-files-found: warn
