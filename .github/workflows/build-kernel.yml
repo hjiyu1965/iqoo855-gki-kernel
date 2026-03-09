@@ -135,25 +135,7 @@ jobs:
           echo "内核版本:"
           make kernelversion || true
 
-      - name: 🩹 尝试修复常见 DTS 语法问题
-        run: |
-          cd kernel_source
-
-          DTS_FILE="arch/arm64/boot/dts/18821/pm8150.dtsi"
-
-          if [ -f "$DTS_FILE" ]; then
-            echo "检测到 $DTS_FILE，尝试修复"
-            sed -n '1,40p' "$DTS_FILE" || true
-
-            sed -i '1s/^\xEF\xBB\xBF//' "$DTS_FILE" || true
-            sed -i '/^[[:space:]]*;[[:space:]]*$/d' "$DTS_FILE" || true
-            sed -i 's/\r$//' "$DTS_FILE" || true
-
-            echo "修复后预览："
-            sed -n '1,40p' "$DTS_FILE" || true
-          else
-            echo "未找到特定 DTS 文件，跳过 DTS 修复"
-          fi
+     
 
       - name: 🔑 集成 KernelSU
         if: github.event.inputs.ENABLE_KSU == 'true'
