@@ -11,13 +11,13 @@ jobs:
       - name: Build
         uses: dabao1955/kernel_build_action@main
         with:
-          kernel-url: https://github.com/hjiyu1965/android_kernel_zte_ums9620_mifi_f50
-          kernel-branch: main
-          config: gki_defconfig
+          kernel-url: https://github.com/hjiyu1965/android_kernel_oneplus_sm8150
+          kernel-branch: lineage-23.0
+          config: vendor/sm8150-perf_defconfig
           arch: arm64
           aosp-gcc: true
           aosp-clang: true
           android-version: 12
-          aosp-clang-version: r416183b
+          aosp-clang-version: r383902
           disable-lto: true
           anykernel3: true
