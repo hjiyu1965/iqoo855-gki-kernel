@@ -3,10 +3,39 @@ name: Build Kernel
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      kernel_repo:
+        description: 'Kernel repository URL'
+        required: true
+        default: 'https://github.com/lineageos/android_kernel_xiaomi_msm8953'
+      kernel_branch:
+        description: 'Kernel branch (e.g., android 13.0)'
+        required: true
+        default: 'android 13.0'
+      kernel_config:
+        description: 'Kernel defconfig'
+        required: true
+        default: 'msm8953_defconfig'
+      arch:
+        description: 'Architecture'
+        required: true
+        default: 'arm64'
+      toolchain_repo:
+        description: 'Toolchain repository URL'
+        required: true
+        default: 'https://github.com/djb77/aarch64-linux-android-4.9'
+      enable_ksu:
+        description: 'Enable KSU (true/false)'
+        required: true
+        default: 'true'
+      enable_ccache:
+        description: 'Enable ccache (true/false)'
+        required: true
+        default: 'true'
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
@@ -16,15 +45,15 @@ jobs:
     - name: Build Kernel
       uses: mlm-games/simple-kernel-build-action@v1
       with:
-        KERNEL_CLONE_CMD: 'git clone https://github.com/lineageos/android_kernel_xiaomi_msm8953 -b android 13.0' # PSA: directory and depth=1 are added automatically!
-        KERNEL_CONFIG: 'msm8953_defconfig'
-        ARCH: 'arm64'
-        TOOLCHAIN_CLONE_CMD: 'git clone https://github.com/djb77/aarch64-linux-android-4.9 ./toolchain/gcc'
-        ENABLE_KSU: 'true'
-        ENABLE_CCACHE: 'true'
+        KERNEL_CLONE_CMD: 'git clone ${{ github.event.inputs.kernel_repo || 'https://github.com/lineageos/android_kernel_xiaomi_msm8953' }} -b "${{ github.event.inputs.kernel_branch || 'android 13.0' }}"'
+        KERNEL_CONFIG: ${{ github.event.inputs.kernel_config || 'msm8953_defconfig' }}
+        ARCH: ${{ github.event.inputs.arch || 'arm64' }}
+        TOOLCHAIN_CLONE_CMD: 'git clone ${{ github.event.inputs.toolchain_repo || 'https://github.com/djb77/aarch64-linux-android-4.9' }} ./toolchain/gcc'
+        ENABLE_KSU: ${{ github.event.inputs.enable_ksu || 'true' }}
+        ENABLE_CCACHE: ${{ github.event.inputs.enable_ccache || 'true' }}
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v3
       with:
         name: kernel-build
-        path: 'kernel_source/flashable-anykernel.zip' # Always named flashable-anykernel.zip
+        path: 'kernel_source/flashable-anykernel.zip'
