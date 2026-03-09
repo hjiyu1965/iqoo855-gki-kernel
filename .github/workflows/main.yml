@@ -9,10 +9,14 @@ on:
         description: 'Kernel repository URL'
         required: true
         default: 'https://github.com/lineageos/android_kernel_xiaomi_msm8953'
+      android_version:
+        description: 'Android version (e.g., 13.0) - used to generate branch "android <version>" if kernel_branch is not specified'
+        required: false
+        default: '13.0'
       kernel_branch:
-        description: 'Kernel branch (e.g., android 13.0)'
-        required: true
-        default: 'android 13.0'
+        description: 'Full kernel branch name (overrides android_version)'
+        required: false
+        default: ''
       kernel_config:
         description: 'Kernel defconfig'
         required: true
@@ -33,27 +37,33 @@ on:
         description: 'Enable ccache (true/false)'
         required: true
         default: 'true'
+      aosp_clang_version:
+        description: 'AOSP Clang version (e.g., r450784d)'
+        required: false
+        default: 'r450784d'
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Build Kernel
-      uses: mlm-games/simple-kernel-build-action@v1
-      with:
-        KERNEL_CLONE_CMD: 'git clone ${{ github.event.inputs.kernel_repo || 'https://github.com/lineageos/android_kernel_xiaomi_msm8953' }} -b "${{ github.event.inputs.kernel_branch || 'android 13.0' }}"'
-        KERNEL_CONFIG: ${{ github.event.inputs.kernel_config || 'msm8953_defconfig' }}
-        ARCH: ${{ github.event.inputs.arch || 'arm64' }}
-        TOOLCHAIN_CLONE_CMD: 'git clone ${{ github.event.inputs.toolchain_repo || 'https://github.com/djb77/aarch64-linux-android-4.9' }} ./toolchain/gcc'
-        ENABLE_KSU: ${{ github.event.inputs.enable_ksu || 'true' }}
-        ENABLE_CCACHE: ${{ github.event.inputs.enable_ccache || 'true' }}
+      - name: Build Kernel
+        uses: mlm-games/simple-kernel-build-action@v1
+        with:
+          # 使用双引号包裹整个命令，内部双引号转义，避免YAML解析错误
+          KERNEL_CLONE_CMD: "git clone ${{ github.event.inputs.kernel_repo || 'https://github.com/lineageos/android_kernel_xiaomi_msm8953' }} -b \"${{ github.event.inputs.kernel_branch || format('android {0}', github.event.inputs.android_version || '13.0') }}\""
+          KERNEL_CONFIG: ${{ github.event.inputs.kernel_config || 'msm8953_defconfig' }}
+          ARCH: ${{ github.event.inputs.arch || 'arm64' }}
+          TOOLCHAIN_CLONE_CMD: "git clone ${{ github.event.inputs.toolchain_repo || 'https://github.com/djb77/aarch64-linux-android-4.9' }} ./toolchain/gcc"
+          ENABLE_KSU: ${{ github.event.inputs.enable_ksu || 'true' }}
+          ENABLE_CCACHE: ${{ github.event.inputs.enable_ccache || 'true' }}
+          AOSP_CLANG_VERSION: ${{ github.event.inputs.aosp_clang_version || 'r450784d' }}
 
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: kernel-build
-        path: 'kernel_source/flashable-anykernel.zip'
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: kernel-build
+          path: 'kernel_source/flashable-anykernel.zip'
