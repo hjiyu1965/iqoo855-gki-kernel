@@ -8,19 +8,19 @@ on:
       kernel_repo:
         description: 'Kernel repository URL'
         required: true
-        default: 'https://github.com/lineageos/android_kernel_xiaomi_msm8953'
+        default: 'https://github.com/LineageOS/android_kernel_oneplus_sm8150'
       android_version:
-        description: 'Android version (e.g., 13.0) - used to generate branch name "android <version>" if kernel_branch is not specified'
+        description: 'Android version (e.g., 23.0) - for LineageOS branch "lineage-X.X"'
         required: false
-        default: '13.0'
+        default: '23.0'
       kernel_branch:
         description: 'Full kernel branch name (overrides android_version)'
         required: false
         default: ''
       kernel_config:
-        description: 'Kernel defconfig'
+        description: 'Kernel defconfig path (relative to arch/ARCH/configs/, NO SPACES)'
         required: true
-        default: 'msm8953_defconfig'
+        default: 'vendor/sm8150-perf_defconfig'
       arch:
         description: 'Architecture'
         required: true
@@ -37,18 +37,27 @@ on:
         description: 'Enable ccache (true/false)'
         required: true
         default: 'true'
-      aosp_clang_version:
-        description: 'AOSP Clang version (e.g., r450784d)'
-        required: false
-        default: 'r450784d'
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-
+    runs-on: ubuntu-24.04
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+
+    - name: Install build dependencies (fix apt package error)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential bc bison flex libssl-dev ccache binutils git make openssl curl zip kmod cpio libelf-dev libtfm-dev libc6-dev device-tree-compiler ca-certificates
+
+    - name: Set up ccache
+      if: ${{ github.event.inputs.enable_ccache == 'true' }}
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        max-size: 500MB
+        key: kernel-build-${{ github.sha }}
+        restore-keys: |
+          kernel-build-
 
     - name: Set kernel branch
       id: set_branch
@@ -56,22 +65,27 @@ jobs:
         if [ -n "${{ github.event.inputs.kernel_branch }}" ]; then
           echo "branch=${{ github.event.inputs.kernel_branch }}" >> $GITHUB_OUTPUT
         else
-          echo "branch=android ${{ github.event.inputs.android_version || '13.0' }}" >> $GITHUB_OUTPUT
+          echo "branch=lineage-${{ github.event.inputs.android_version || '23.0' }}" >> $GITHUB_OUTPUT
         fi
 
     - name: Build Kernel
-      uses: mlm-games/simple-kernel-build-action@v1
+      uses: mlm-games/simple-kernel-build-action@v1.1.0
       with:
-        KERNEL_CLONE_CMD: 'git clone ${{ github.event.inputs.kernel_repo || 'https://github.com/lineageos/android_kernel_xiaomi_msm8953' }} -b "${{ steps.set_branch.outputs.branch }}"'
-        KERNEL_CONFIG: ${{ github.event.inputs.kernel_config || 'msm8953_defconfig' }}
-        ARCH: ${{ github.event.inputs.arch || 'arm64' }}
-        TOOLCHAIN_CLONE_CMD: 'git clone ${{ github.event.inputs.toolchain_repo || 'https://github.com/djb77/aarch64-linux-android-4.9' }} ./toolchain/gcc'
-        ENABLE_KSU: ${{ github.event.inputs.enable_ksu || 'true' }}
-        ENABLE_CCACHE: ${{ github.event.inputs.enable_ccache || 'true' }}
-        AOSP_CLANG_VERSION: ${{ github.event.inputs.aosp_clang_version || 'r450784d' }}
+        KERNEL_CLONE_CMD: "git clone ${{ github.event.inputs.kernel_repo || 'https://github.com/LineageOS/android_kernel_oneplus_sm8150' }} -b \"${{ steps.set_branch.outputs.branch }}\" --depth=1"
+        KERNEL_CONFIG: "${{ github.event.inputs.kernel_config || 'vendor/sm8150-perf_defconfig' }}"
+        ARCH: "${{ github.event.inputs.arch || 'arm64' }}"
+        TOOLCHAIN_CLONE_CMD: "git clone ${{ github.event.inputs.toolchain_repo || 'https://github.com/djb77/aarch64-linux-android-4.9' }} ./toolchain/gcc --depth=1"
+        ENABLE_KSU: "${{ github.event.inputs.enable_ksu || 'true' }}"
+        ENABLE_CCACHE: "${{ github.event.inputs.enable_ccache || 'true' }}"
+        KSU_CURL_COMMAND: "curl -LSs https://raw.githubusercontent.com/mlm-games/KernelSU-Non-GKI/main/kernel/setup-subm.sh | bash -s"
+        ANYKERNEL_URL: "https://github.com/mlm-games/AnyKernel3"
+        DTB_FILENAME: "dtb.img"
+        DTBO_FILENAME: "dtbo.img"
+        MAKE_ARGS: "O=out PATH=/usr/lib/ccache:$PATH CC=\"ccache gcc\" CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi-"
 
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: kernel-build
-        path: 'kernel_source/flashable-anykernel.zip'
+        path: kernel_source/flashable-anykernel.zip
+        if-no-files-found: error
