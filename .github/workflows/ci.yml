@@ -1,5 +1,4 @@
 name: CI
-
 on:
   workflow_dispatch:
 
@@ -7,6 +6,8 @@ jobs:
   build-kernel:
     name: Build Kernel
     runs-on: ubuntu-22.04
+    env:   # <--- 添加这里，强制使用 Node.js 24
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Build
         uses: dabao1955/kernel_build_action@main
