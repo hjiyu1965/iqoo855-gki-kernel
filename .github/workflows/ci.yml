@@ -16,7 +16,7 @@ jobs:
         with:
           kernel-url: https://github.com/hjiyu1965/android_kernel_zte_ums9620_mifi_f50
           kernel-branch: main
-          config: sprd_debian_defconfig
+          config: sprd_qogirl6_defconfig
           arch: arm64
           aosp-gcc: true
           aosp-clang: true
