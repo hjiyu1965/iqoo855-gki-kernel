@@ -1,0 +1,122 @@
+name: CI - Kernel Build with Enhanced Diagnostics
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-kernel:
+    name: Build Kernel
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout Kernel Repository
+        uses: actions/checkout@v4
+        with:
+          repository: hjiyu1965/android_kernel_zte_ums9620_mifi_f50
+          ref: main
+          path: kernel
+          depth: 1
+          submodules: true
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses-dev flex bison dwarves libssl-dev libelf-dev bc kmod cpio
+
+      - name: Setup Toolchains
+        run: |
+          # Install AOSP Clang
+          CLANG_VERSION="r416183b"
+          wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android-12.0.0_r19/toolchain/$CLANG_VERSION.tar.gz -O clang.tar.gz
+          mkdir -p ~/clang && tar -xzf clang.tar.gz -C ~/clang
+          rm clang.tar.gz
+          
+          # Install AOSP GCC (64-bit)
+          wget https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/heads/android-12.0.0_r19.tar.gz -O gcc64.tar.gz
+          mkdir -p ~/gcc-64 && tar -xzf gcc64.tar.gz -C ~/gcc-64
+          rm gcc64.tar.gz
+          
+          # Install AOSP GCC (32-bit)
+          wget https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/heads/android-12.0.0_r19.tar.gz -O gcc32.tar.gz
+          mkdir -p ~/gcc-32 && tar -xzf gcc32.tar.gz -C ~/gcc-32
+          rm gcc32.tar.gz
+          
+          echo "Clang version: $(~/clang/bin/clang --version | head -1)"
+          echo "GCC 64-bit: $(~/gcc-64/bin/aarch64-linux-android-gcc --version | head -1)"
+          echo "GCC 32-bit: $(~/gcc-32/bin/arm-linux-androideabi-gcc --version | head -1)"
+
+      - name: Prepare Configuration
+        working-directory: kernel
+        run: |
+          make mrproper
+          make ARCH=arm64 sprd_qogirl6_defconfig
+          
+          # ✅ 关键修复：禁用导致构建失败的 SOC 驱动
+          sed -i 's/^CONFIG_SOC_SPRD.*/# CONFIG_SOC_SPRD is not set/' .config
+          sed -i 's/^CONFIG_SIPC.*/# CONFIG_SIPC is not set/' .config
+          sed -i 's/^CONFIG_SPRD_SFP.*/# CONFIG_SPRD_SFP is not set/' .config
+          sed -i 's/^CONFIG_SPRD_UMS.*/# CONFIG_SPRD_UMS is not set/' .config
+          
+          # 确保基本功能启用
+          scripts/config --enable CONFIG_MODULES
+          scripts/config --enable CONFIG_EXT4_FS
+          scripts/config --enable CONFIG_BLK_DEV_INITRD
+          
+          # 确保 LTO 已禁用
+          scripts/config --disable CONFIG_LTO
+
+      - name: Build Kernel with Detailed Logging
+        working-directory: kernel
+        run: |
+          export PATH="$HOME/clang/bin:$HOME/gcc-64/bin:$HOME/gcc-32/bin:$PATH"
+          export CLANG_PATH="$HOME/clang"
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-android-
+          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
+          
+          # ✅ 关键改进：使用 V=1 和 -j1 获取完整错误日志
+          make -j1 \
+            ARCH=arm64 \
+            O=out \
+            V=1 \
+            CC=clang \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            all 2>&1 | tee build.log
+          
+          if [ $? -ne 0 ]; then
+            echo "❌ Build failed. Critical error details:"
+            tail -n 50 build.log
+            exit 1
+          fi
+          
+          echo "✅ Build successful! Kernel image:"
+          ls -lh out/arch/arm64/boot/Image*
+
+      - name: Package with AnyKernel3
+        if: success()
+        run: |
+          git clone https://github.com/osm0sis/AnyKernel3
+          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          echo "qogirl6" > AnyKernel3/AnyKernel3.sh
+          echo "do.devicecheck=1" >> AnyKernel3/AnyKernel3.sh
+          echo "do.modules=0" >> AnyKernel3/AnyKernel3.sh
+          echo "do.cleanup=1" >> AnyKernel3/AnyKernel3.sh
+          echo "do.cleanuponabort=0" >> AnyKernel3/AnyKernel3.sh
+          cd AnyKernel3
+          zip -r9 "../kernel-qogirl6-$(date +%Y%m%d).zip" . -x .git README.md
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-build-${{ github.run_id }}
+          path: |
+            kernel/build.log
+            kernel/out/arch/arm64/boot/*
+            AnyKernel3/*.zip
+          retention-days: 7
