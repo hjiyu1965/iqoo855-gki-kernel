@@ -16,11 +16,11 @@ jobs:
         with:
           kernel-url: https://github.com/hjiyu1965/linux-sprd
           kernel-branch: main
-          config: check_defconfig
+          config: sprd_sharkle_defconfig
           arch: arm64
           aosp-gcc: true
           aosp-clang: true
-          android-version: 12
+          android-version: 10
           aosp-clang-version: r353983c
           disable-lto: true
           anykernel3: true
