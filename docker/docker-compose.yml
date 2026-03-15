@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  kernel-builder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: android-kernel-builder:latest
+    container_name: android-kernel-builder
+    volumes:
+      # 挂载工作目录
+      - .:/workspace
+      # 挂载ccache缓存目录
+      - kernel-ccache:/workspace/.ccache
+    environment:
+      - TZ=Asia/Shanghai
+      - CCACHE_DIR=/workspace/.ccache
+      - CCACHE_MAXSIZE=50G
+    working_dir: /workspace
+    command: /bin/bash
+    stdin_open: true
+    tty: true
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          cpus: '8'
+          memory: 16G
+        reservations:
+          cpus: '4'
+          memory: 8G
+    # 网络配置
+    networks:
+      - kernel-build
+
+  # 可选: 用于测试的容器
+  kernel-tester:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: android-kernel-builder:latest
+    container_name: android-kernel-tester
+    volumes:
+      - .:/workspace
+    environment:
+      - TZ=Asia/Shanghai
+    working_dir: /workspace
+    command: /bin/bash
+    stdin_open: true
+    tty: true
+    networks:
+      - kernel-build
+    profiles:
+      - test
+
+volumes:
+  kernel-ccache:
+    driver: local
+
+networks:
+  kernel-build:
+    driver: bridge

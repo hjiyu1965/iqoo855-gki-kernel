@@ -1,348 +1,496 @@
-# Android内核编译管理与自动化构建系统
+# Android Kernel Build System
 
-[![Build Status](https://github.com/your-username/android-kernel-build/actions/workflows/kernel-build.yml/badge.svg)](https://github.com/your-username/android-kernel-build/actions/workflows/kernel-build.yml)
-[![License: GPL v2](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
-[![Docker](https://img.shields.io/badge/Docker-Ready-blue)](https://hub.docker.com/)
-
-一个完整的Android内核编译管理与自动化构建系统，支持多架构并行构建、Docker容器化编译环境、GitHub Actions CI/CD自动化。
+完整的Android内核编译流程管理与自动化构建系统，支持多架构、多设备的内核编译。
 
 ## 功能特性
 
-- **多架构支持**: 支持 arm64-v8a、armeabi-v7a、x86_64 架构
-- **自动化源码获取**: 支持从AOSP官方仓库和第三方仓库自动拉取内核源码
-- **Docker容器化**: 提供标准化的Docker编译环境，确保构建一致性
-- **预配置文件**: 针对主流Android设备架构的优化内核配置
-- **增量编译**: 支持增量编译，加速开发迭代
-- **错误处理**: 详细的错误捕获、日志记录和解决方案建议
-- **CI/CD集成**: GitHub Actions工作流实现自动化构建和发布
-- **产物管理**: 标准化的编译产物输出和打包
+- 自动化源码获取与完整性校验
+- Docker容器化编译环境
+- 多架构支持 (arm64-v8a, armeabi-v7a, x86_64)
+- 增量编译与ccache加速
+- 详细的错误处理与日志记录
+- CI/CD自动化构建
+- 编译产物自动打包
+- 多设备预设配置
 
 ## 目录结构
 
 ```
 .
-├── .github/workflows/      # GitHub Actions CI/CD配置
-├── configs/               # 内核配置文件
-│   └── arch/             # 架构特定配置
-│       ├── arm64/        # ARM64配置
-│       ├── arm/          # ARM配置
-│       └── x86_64/       # x86_64配置
-├── docker/               # Docker编译环境
-│   ├── Dockerfile        # Docker镜像定义
-│   ├── docker-compose.yml
-│   └── build-docker.sh   # Docker镜像构建脚本
-├── docs/                 # 文档
-├── output/               # 编译输出目录
-│   ├── images/          # 内核镜像
-│   ├── modules/         # 内核模块
-│   ├── dtbs/            # 设备树文件
-│   ├── packages/        # 打包产物
-│   └── logs/            # 编译日志
-├── scripts/              # 构建脚本
-│   ├── fetch_kernel.sh  # 内核源码获取
-│   ├── build.sh         # 主编译脚本
-│   └── error_handler.sh # 错误处理
-├── tools/                # 辅助工具
-├── CONTRIBUTING.md       # 贡献指南
-├── LICENSE              # 许可证
-└── README.md            # 本文件
+├── .github/
+│   └── workflows/
+│       └── kernel-build.yml    # GitHub Actions CI/CD配置
+├── configs/
+│   └── arch/
+│       ├── arm64/
+│       │   └── defconfig      # ARM64内核配置
+│       ├── arm/
+│       │   └── defconfig      # ARM内核配置
+│       └── x86_64/
+│           └── defconfig      # x86_64内核配置
+├── docker/
+│   ├── Dockerfile             # Docker镜像定义
+│   ├── docker-compose.yml     # Docker Compose配置
+│   └── build-docker.sh       # Docker镜像构建脚本
+├── scripts/
+│   ├── fetch_kernel.sh        # 内核源码获取脚本
+│   ├── build.sh              # 内核编译脚本
+│   ├── error_handler.sh      # 错误处理脚本
+│   └── setup.sh              # 环境设置脚本
+├── output/
+│   ├── images/               # 内核镜像输出
+│   ├── modules/              # 内核模块输出
+│   ├── dtbs/                 # 设备树输出
+│   ├── packages/             # 打包产物
+│   └── logs/                 # 编译日志
+├── config.env                # 环境配置文件
+├── README.md                 # 项目文档
+└── LICENSE                   # 许可证
 ```
+
+## 环境要求
+
+### 系统要求
+- 操作系统: Ubuntu 20.04+, Debian 11+, Fedora 35+, Arch Linux
+- 内存: 至少 8GB RAM (推荐 16GB+)
+- 磁盘空间: 至少 50GB 可用空间
+- CPU: 多核处理器 (推荐 4核+)
+
+### 软件依赖
+- Git 2.0+
+- Make 4.0+
+- GCC 9.0+ 或 Clang 10.0+
+- Python 3.6+
+- Docker (可选，用于容器化编译)
+
+### 交叉编译器
+- ARM64: aarch64-linux-gnu-gcc
+- ARM: arm-linux-gnueabihf-gcc
+- x86_64: gcc/clang
 
 ## 快速开始
 
-### 环境要求
-
-- **操作系统**: Linux (Ubuntu 20.04+ 推荐)
-- **内存**: 至少 4GB RAM (推荐 8GB+)
-- **磁盘空间**: 至少 50GB 可用空间
-- **Docker**: 20.10+ (可选，用于容器化编译)
-
-### 基础依赖安装
+### 1. 克隆仓库
 
 ```bash
-# Ubuntu/Debian
-sudo apt-get update
-sudo apt-get install -y \
-    git curl wget \
-    build-essential libncurses-dev \
-    bison flex libssl-dev libelf-dev \
-    bc cpio kmod \
-    device-tree-compiler \
-    python3 python3-pip
-
-# 安装交叉编译器
-sudo apt-get install -y \
-    gcc-aarch64-linux-gnu \
-    gcc-arm-linux-gnueabihf
-
-# 安装Clang/LLVM (可选但推荐)
-sudo apt-get install -y clang llvm lld
-```
-
-### 1. 克隆本仓库
-
-```bash
-git clone https://github.com/your-username/android-kernel-build.git
+git clone https://github.com/yourusername/android-kernel-build.git
 cd android-kernel-build
 ```
 
-### 2. 获取内核源码
+### 2. 设置编译环境
 
 ```bash
-# 获取AOSP官方内核 (默认: android13-5.15)
-./scripts/fetch_kernel.sh
+chmod +x scripts/setup.sh
+./scripts/setup.sh
+```
 
-# 获取特定分支
+### 3. 获取内核源码
+
+```bash
+chmod +x scripts/fetch_kernel.sh
 ./scripts/fetch_kernel.sh -b android13-5.15
-
-# 获取第三方内核
-./scripts/fetch_kernel.sh \
-    -r https://github.com/LineageOS/android_kernel_qcom_sm8150 \
-    -b lineage-20
-
-# 使用repo工具获取 (AOSP官方)
-./scripts/fetch_kernel.sh -b android13-5.15 -v
 ```
 
-### 3. 编译内核
+### 4. 编译内核
 
 ```bash
-# 使用默认配置编译 (ARM64)
-./scripts/build.sh
-
-# 为特定设备编译
-./scripts/build.sh -d pixel6
-
-# 使用自定义配置
-./scripts/build.sh -c my_custom_defconfig
-
-# 指定架构
-./scripts/build.sh -a arm64
-
-# 清理后重新编译
-./scripts/build.sh --clean
-
-# 启动配置界面
-./scripts/build.sh --menuconfig
-
-# 编译并打包
-./scripts/build.sh --pack
+chmod +x scripts/build.sh
+./scripts/build.sh -a arm64 -d pixel6 --pack
 ```
 
-### 4. 使用Docker编译 (推荐)
+### 5. 查看编译产物
 
 ```bash
-# 构建Docker镜像
-./docker/build-docker.sh
-
-# 启动编译环境
-docker-compose up -d kernel-builder
-
-# 进入编译容器
-docker-compose exec kernel-builder bash
-
-# 在容器内编译
-/workspace/scripts/build.sh
-
-# 一键编译
-docker-compose run --rm kernel-builder \
-    /workspace/scripts/build.sh -a arm64 --pack
+ls -la output/images/
+ls -la output/packages/
 ```
 
 ## 详细使用说明
 
-### 内核源码获取脚本
+### 获取内核源码
+
+使用 `fetch_kernel.sh` 脚本自动获取Android内核源码：
 
 ```bash
-./scripts/fetch_kernel.sh [选项]
+# 基本用法
+./scripts/fetch_kernel.sh -b android13-5.15
 
-选项:
-    -h, --help              显示帮助信息
-    -r, --repo URL          指定内核仓库URL
-    -b, --branch BRANCH     指定分支/标签/提交哈希
-    -d, --directory DIR     指定源码存放目录
-    -c, --clean             清理现有目录后重新获取
-    -v, --verify            启用代码完整性校验
-    -s, --shallow           使用浅克隆
-    -j, --jobs N            并行下载任务数
-    --mr-proper             下载后执行mrproper清理
+# 使用特定分支
+./scripts/fetch_kernel.sh -b android12-5.10
+
+# 使用特定标签
+./scripts/fetch_kernel.sh -b android-5.15.110
+
+# 使用第三方仓库
+./scripts/fetch_kernel.sh -r https://github.com/LineageOS/android_kernel_qcom_sm8150 -b lineage-20
+
+# 启用代码完整性校验
+./scripts/fetch_kernel.sh -b android13-5.15 -v
+
+# 清理后重新获取
+./scripts/fetch_kernel.sh -b android13-5.15 -c
+
+# 使用浅克隆节省空间
+./scripts/fetch_kernel.sh -b android13-5.15 -s
 ```
 
-### 编译脚本
+支持的内核版本：
+- android13-5.15
+- android13-5.10
+- android12-5.10
+- android12-5.4
+- android11-5.4
+- android-4.19-stable
+- android-4.14-stable
+
+### 编译内核
+
+使用 `build.sh` 脚本编译内核：
 
 ```bash
-./scripts/build.sh [选项]
+# 基本用法
+./scripts/build.sh -a arm64
 
-选项:
-    -h, --help              显示帮助信息
-    -a, --arch ARCH         目标架构 (arm64|arm|x86_64)
-    -d, --device DEVICE     目标设备型号
-    -c, --config CONFIG     指定defconfig配置文件
-    -j, --jobs N            并行编译任务数
-    --clean                 清理后重新编译
-    --mrproper              执行make mrproper清理
-    --menuconfig            启动menuconfig配置界面
-    --no-modules            不编译内核模块
-    --no-dtbs               不编译设备树
-    --pack                  编译完成后打包产物
-    -v, --verbose           显示详细输出
-```
+# 为特定设备编译
+./scripts/build.sh -a arm64 -d pixel6
 
-### 支持的设备
+# 使用自定义配置文件
+./scripts/build.sh -a arm64 -c configs/arch/arm64/defconfig
 
-| 设备 | 架构 | 配置 |
-|------|------|------|
-| Google Pixel 6/6 Pro | arm64 | gs101_defconfig |
-| Google Pixel 7/7 Pro | arm64 | gs201_defconfig |
-| Samsung Galaxy S22 | arm64 | exynos2200_defconfig |
-| Samsung Galaxy S23 | arm64 | snapdragon8gen2_defconfig |
-| Xiaomi 13/13 Pro | arm64 | snapdragon8gen2_defconfig |
-| OnePlus 11 | arm64 | snapdragon8gen2_defconfig |
-| 通用ARM64 | arm64 | defconfig |
-| 通用ARM | arm | defconfig |
-| 通用x86_64 | x86_64 | x86_64_defconfig |
+# 指定并行任务数
+./scripts/build.sh -a arm64 -j 8
 
-## CI/CD自动化
+# 启用增量编译
+./scripts/build.sh -a arm64 -i
 
-本仓库包含完整的GitHub Actions工作流配置：
+# 使用ccache加速
+./scripts/build.sh -a arm64 --ccache
 
-### 自动触发条件
+# 打包编译产物
+./scripts/build.sh -a arm64 --pack
 
-- **Push到main分支**: 自动触发多架构构建
-- **Pull Request**: 验证构建是否通过
-- **手动触发**: 支持自定义参数的手动构建
-
-### 构建矩阵
-
-| 架构 | 状态 | 产物 |
-|------|------|------|
-| ARM64 | ✅ | Image.gz, modules, dtbs |
-| ARM | ✅ | zImage, modules, dtbs |
-| x86_64 | ✅ | bzImage, modules |
-
-### 使用GitHub Actions
-
-1. Fork本仓库
-2. 在Settings > Secrets中添加必要的密钥
-3. 推送代码或手动触发工作流
-4. 在Actions标签页查看构建状态
-5. 下载构建产物或查看自动发布的Release
-
-## 常见问题
-
-### Q: 编译失败，提示缺少依赖
-
-A: 运行以下命令安装依赖：
-```bash
-sudo apt-get update
-sudo apt-get install -y build-essential libncurses-dev bison flex libssl-dev libelf-dev
-```
-
-### Q: 交叉编译器未找到
-
-A: 安装交叉编译器：
-```bash
-sudo apt-get install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
-```
-
-### Q: 内存不足导致编译失败
-
-A: 减少并行任务数：
-```bash
-./scripts/build.sh -j2  # 使用2个并行任务
-```
-
-### Q: 如何添加新的设备支持
-
-A: 
-1. 在 `configs/arch/<arch>/` 目录添加设备配置文件
-2. 在 `scripts/build.sh` 的 `DEVICE_CONFIGS` 数组中添加设备映射
-3. 提交Pull Request
-
-### Q: Docker编译速度较慢
-
-A: 
-1. 启用ccache缓存
-2. 使用本地Docker镜像
-3. 增加Docker容器的CPU和内存限制
-
-## 故障排查
-
-### 查看详细日志
-
-```bash
-# 查看最新编译日志
-tail -f output/logs/build_*.log
-
-# 分析错误日志
-./scripts/error_handler.sh analyze output/logs/build_*.log
-
-# 诊断环境
-./scripts/error_handler.sh diagnose
-```
-
-### 清理构建环境
-
-```bash
 # 清理编译产物
-make clean
+./scripts/build.sh -a arm64 --clean
 
 # 完全清理
-make mrproper
+./scripts/build.sh -a arm64 --mrproper
 
-# 删除输出目录
-rm -rf output/*
+# 详细输出
+./scripts/build.sh -a arm64 -v
+```
 
-# 使用脚本清理
-./scripts/build.sh --clean
+支持的架构：
+- `arm64` - 64位ARM，适用于现代Android设备
+- `arm` - 32位ARM，适用于传统Android设备
+- `x86_64` - 64位x86，适用于Android模拟器
+
+支持的设备：
+- Google Pixel系列: `pixel6`, `pixel5`, `pixel4`, `pixel3`
+- Samsung系列: `samsung_s21`, `samsung_s20`
+- Xiaomi系列: `xiaomi_mi11`, `xiaomi_mi10`
+- OnePlus系列: `oneplus_9`, `oneplus_8`
+- 通用设备: `generic_arm64`, `generic_arm`, `generic_x86_64`
+
+### 使用Docker编译
+
+使用Docker容器进行编译，确保环境一致性：
+
+```bash
+# 构建Docker镜像
+cd docker
+chmod +x build-docker.sh
+./build-docker.sh
+
+# 使用docker-compose启动容器
+docker-compose up -d kernel-builder
+
+# 进入容器
+docker-compose exec kernel-builder bash
+
+# 在容器中编译
+cd /workspace
+./scripts/fetch_kernel.sh -b android13-5.15
+./scripts/build.sh -a arm64 -d pixel6
+
+# 退出容器
+exit
+
+# 停止容器
+docker-compose down
+```
+
+### 错误处理
+
+使用 `error_handler.sh` 脚本诊断和解决编译问题：
+
+```bash
+# 检查系统资源和依赖
+./scripts/error_handler.sh --check
+
+# 检查特定架构的编译器
+./scripts/error_handler.sh --check --arch arm64
+
+# 分析日志文件
+./scripts/error_handler.sh --log output/logs/build.log
+
+# 生成错误报告
+./scripts/error_handler.sh --report
+
+# 启用调试模式
+./scripts/error_handler.sh --debug
+```
+
+常见问题解决：
+- **缺少依赖**: 运行 `./scripts/setup.sh` 安装所需依赖
+- **内存不足**: 减少并行任务数 `-j 4` 或增加swap空间
+- **磁盘空间不足**: 运行 `./scripts/build.sh -a arm64 --clean` 清理
+- **编译错误**: 查看详细日志 `cat output/logs/build_*.log`
+
+## 编译产物
+
+编译完成后，产物将输出到以下目录：
+
+```
+output/
+├── images/               # 内核镜像
+│   ├── Image.gz          # ARM64压缩内核镜像
+│   ├── Image.gz-dtb      # ARM64内核+设备树镜像
+│   ├── zImage           # ARM内核镜像
+│   └── bzImage          # x86_64内核镜像
+├── modules/              # 内核模块
+│   └── *.ko             # 内核模块文件
+├── dtbs/                 # 设备树文件
+│   └── *.dtb            # 设备树二进制文件
+├── packages/             # 打包产物
+│   └── kernel_*.tar.gz # 完整的内核包
+└── logs/                # 编译日志
+    ├── build_*.log      # 编译日志
+    ├── error_*.log      # 错误日志
+    └── debug_*.log      # 调试日志
+```
+
+## 配置文件
+
+### 环境配置 (config.env)
+
+```bash
+# 内核源码配置
+KERNEL_SOURCE=https://github.com/hjiyu1965/linux-sprd
+KERNEL_SOURCE_BRANCH=main
+KERNEL_CONFIG=EOL-sprd_sharkle_defconfig
+KERNEL_IMAGE_NAME=Image.gz-dtb
+ARCH=arm64
+
+# Clang配置
+USE_CUSTOM_CLANG=false
+CLANG_BRANCH=android10-release
+CLANG_VERSION=r353983c
+
+# GCC配置
+ENABLE_GCC_ARM64=true
+ENABLE_GCC_ARM32=true
+
+# KernelSU配置
+ENABLE_KERNELSU=false
+KERNELSU_TAG=v0.9.5
+
+# 编译选项
+DISABLE_LTO=false
+DISABLE_CC_WERROR=false
+ENABLE_CCACHE=true
+```
+
+### 内核配置文件
+
+内核配置文件位于 `configs/arch/` 目录下：
+
+- `configs/arch/arm64/defconfig` - ARM64内核配置
+- `configs/arch/arm/defconfig` - ARM内核配置
+- `configs/arch/x86_64/defconfig` - x86_64内核配置
+
+自定义配置：
+```bash
+# 复制默认配置
+cp configs/arch/arm64/defconfig my_defconfig
+
+# 编辑配置
+make menuconfig
+
+# 保存配置
+cp .config my_defconfig
+
+# 使用自定义配置编译
+./scripts/build.sh -a arm64 -c my_defconfig
+```
+
+## CI/CD集成
+
+### GitHub Actions
+
+项目包含完整的GitHub Actions工作流配置，支持：
+
+- 自动触发构建（push、PR）
+- 多架构并行构建
+- 手动触发构建
+- 构建产物自动上传
+- 自动创建Release
+- 构建状态通知
+
+手动触发构建：
+1. 进入GitHub仓库的Actions页面
+2. 选择 "Android Kernel Build CI/CD" 工作流
+3. 点击 "Run workflow"
+4. 选择参数（架构、设备等）
+5. 点击 "Run workflow"
+
+### Docker Hub
+
+Docker镜像自动构建并推送到Docker Hub：
+
+```bash
+# 拉取最新镜像
+docker pull android-kernel-builder:latest
+
+# 使用镜像编译
+docker run -it --rm -v $(pwd):/workspace android-kernel-builder:latest
 ```
 
 ## 版本控制策略
 
-- **主分支**: `main` - 稳定版本
-- **开发分支**: `develop` - 开发中的功能
-- **功能分支**: `feature/*` - 新功能开发
-- **修复分支**: `hotfix/*` - 紧急修复
+### 分支策略
 
-版本号格式: `v主版本.次版本.修订号`
+- `main` - 主分支，稳定版本
+- `develop` - 开发分支，最新功能
+- `feature/*` - 功能分支
+- `bugfix/*` - 修复分支
+- `release/*` - 发布分支
+
+### 版本号规则
+
+版本号格式：`MAJOR.MINOR.PATCH`
+
+- `MAJOR` - 重大版本更新
+- `MINOR` - 新功能添加
+- `PATCH` - Bug修复
+
+示例：
+- `1.0.0` - 初始版本
+- `1.1.0` - 添加新功能
+- `1.1.1` - 修复bug
+
+### 发布流程
+
+1. 创建发布分支：`git checkout -b release/1.0.0`
+2. 更新版本号和变更日志
+3. 提交并推送：`git push origin release/1.0.0`
+4. 创建Pull Request到main分支
+5. 合并后自动创建GitHub Release
+
+## 常见问题排查
+
+### 编译失败
+
+**问题**: 编译过程中出现错误
+
+**解决方案**:
+1. 查看详细日志：`cat output/logs/build_*.log`
+2. 运行错误诊断：`./scripts/error_handler.sh --log output/logs/build_*.log`
+3. 清理后重新编译：`./scripts/build.sh -a arm64 --clean`
+4. 减少并行任务数：`./scripts/build.sh -a arm64 -j 4`
+
+### 内存不足
+
+**问题**: 编译过程中出现 "Killed" 或内存错误
+
+**解决方案**:
+1. 增加swap空间：
+```bash
+sudo fallocate -l 8G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+```
+2. 减少并行任务数：`./scripts/build.sh -a arm64 -j 2`
+3. 关闭其他占用内存的程序
+
+### 磁盘空间不足
+
+**问题**: 编译过程中出现 "No space left on device"
+
+**解决方案**:
+1. 清理临时文件：
+```bash
+sudo apt-get clean
+sudo journalctl --vacuum-time=7d
+```
+2. 清理编译产物：`./scripts/build.sh -a arm64 --clean`
+3. 删除旧的源码：`rm -rf kernel_source`
+4. 扩展磁盘空间
+
+### 交叉编译器未找到
+
+**问题**: 提示交叉编译器未找到
+
+**解决方案**:
+1. 安装交叉编译器：
+```bash
+sudo apt-get install gcc-aarch64-linux-gnu
+sudo apt-get install gcc-arm-linux-gnueabihf
+```
+2. 检查PATH环境变量
+3. 使用Docker容器编译
+
+### 依赖缺失
+
+**问题**: 提示缺少某些依赖
+
+**解决方案**:
+1. 运行环境设置脚本：`./scripts/setup.sh`
+2. 手动安装依赖：
+```bash
+sudo apt-get install build-essential libncurses-dev libssl-dev libelf-dev bc bison flex
+```
 
 ## 贡献指南
 
-我们欢迎所有形式的贡献！请查看 [CONTRIBUTING.md](CONTRIBUTING.md) 了解详细信息。
+我们欢迎任何形式的贡献！请查看 [CONTRIBUTING.md](CONTRIBUTING.md) 了解详细信息。
 
-### 提交Issue
-
-- 使用清晰的标题描述问题
-- 提供详细的复现步骤
-- 附上相关的日志文件
-- 说明环境信息(操作系统、架构等)
-
-### 提交Pull Request
+### 贡献流程
 
 1. Fork本仓库
-2. 创建功能分支 (`git checkout -b feature/amazing-feature`)
-3. 提交更改 (`git commit -m 'Add amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
+2. 创建功能分支：`git checkout -b feature/AmazingFeature`
+3. 提交更改：`git commit -m 'Add some AmazingFeature'`
+4. 推送到分支：`git push origin feature/AmazingFeature`
 5. 创建Pull Request
+
+### 代码规范
+
+- 遵循现有代码风格
+- 添加适当的注释
+- 编写清晰的提交信息
+- 确保所有测试通过
 
 ## 许可证
 
-本项目采用 [GPL-2.0](LICENSE) 许可证。
-
-内核源码遵循其各自的许可证(通常为GPL-2.0)。
+本项目采用 GPL-2.0 许可证。详见 [LICENSE](LICENSE) 文件。
 
 ## 致谢
 
-- [Android Open Source Project](https://source.android.com/)
-- [LineageOS](https://lineageos.org/)
-- [Kernel.org](https://www.kernel.org/)
+感谢所有为本项目做出贡献的开发者！
 
 ## 联系方式
 
-- 项目主页: https://github.com/your-username/android-kernel-build
-- Issue追踪: https://github.com/your-username/android-kernel-build/issues
-- 邮件: your-email@example.com
+- 问题反馈: [GitHub Issues](https://github.com/yourusername/android-kernel-build/issues)
+- 功能建议: [GitHub Discussions](https://github.com/yourusername/android-kernel-build/discussions)
+- 邮件: your.email@example.com
+
+## 相关链接
+
+- [Android Open Source Project](https://source.android.com/)
+- [Linux Kernel](https://www.kernel.org/)
+- [Docker](https://www.docker.com/)
+- [GitHub Actions](https://github.com/features/actions)
 
 ---
 
-**注意**: 本项目和编译的内核仅供学习和研究使用。使用编译的内核可能导致设备保修失效，请自行承担风险。
+**注意**: 本项目仅用于学习和研究目的。使用本工具编译的内核可能不适合生产环境使用。
