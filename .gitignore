@@ -1,0 +1,133 @@
+# Android Kernel Build System - Git Ignore
+
+# Kernel source directory
+kernel_source/
+android-kernel/
+kernel/
+
+# Build output
+output/images/*
+output/modules/*
+output/dtbs/*
+output/packages/*
+output/logs/*
+!output/images/.gitkeep
+!output/modules/.gitkeep
+!output/dtbs/.gitkeep
+!output/packages/.gitkeep
+!output/logs/.gitkeep
+
+# Build artifacts
+*.o
+*.o.*
+*.a
+*.s
+*.ko
+*.ko.*
+*.mod
+*.mod.c
+*.mod.o
+*.order
+*.symvers
+*.cmd
+*.d
+
+# Kernel build files
+.config
+.config.old
+.config.gz
+.version
+*.dtb
+*.dtbo
+Image
+Image.gz
+zImage
+bzImage
+vmlinux
+vmlinux.o
+System.map
+Module.symvers
+modules.builtin
+modules.order
+
+# ccache
+.ccache/
+
+# Docker
+.docker/
+docker/*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# Logs
+*.log
+
+# Archives
+*.tar
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.zip
+*.rar
+*.7z
+
+# Keys and certificates (security)
+*.pem
+*.key
+*.crt
+*.csr
+*.p12
+*.pfx
+
+# Local configuration
+.env
+.env.local
+.env.*.local
+local.config
+
+# Backup files
+*.backup
+*~
+.#*
+
+# Core dumps
+core
+core.*
+vmlinux-
+
+# Generated files
+include/generated/
+include/config/
+arch/*/include/generated/
+
+# Misc
+*.patch
+*.diff
+*.orig
+*.rej
