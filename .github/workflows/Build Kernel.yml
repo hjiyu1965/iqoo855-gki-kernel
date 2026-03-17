@@ -19,7 +19,7 @@ jobs:
         KERNEL_CLONE_CMD: 'git clone https://github.com/hjiyu1965/android_kernel_nabu_sm8150-ac -b main' # PSA: directory and depth=1 are added automatically!
         KERNEL_CONFIG: 'vranchu64_defconfig'
         ARCH: 'arm64'
-        TOOLCHAIN_CLONE_CMD: 'git clone https://github.com/djb77/aarch64-linux-android-4.9 ./toolchain/gcc'
+        TOOLCHAIN_CLONE_CMD: 'git clone https://gitlab.com/TeeFirefly/prebuilts/-/tree/master/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin ./toolchain/gcc'
         ENABLE_KSU: 'false'
         ENABLE_CCACHE: 'true'
 
