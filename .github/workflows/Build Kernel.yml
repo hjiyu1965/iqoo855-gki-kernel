@@ -20,7 +20,7 @@ jobs:
         KERNEL_CONFIG: 'vendor/sm8150-perf_defconfig'
         ARCH: 'arm64'
         TOOLCHAIN_CLONE_CMD: 'git clone https://github.com/djb77/aarch64-linux-android-4.9 ./toolchain/gcc'
-        ENABLE_KSU: 'true'
+        ENABLE_KSU: 'false'
         ENABLE_CCACHE: 'true'
 
     - name: Upload build artifacts
