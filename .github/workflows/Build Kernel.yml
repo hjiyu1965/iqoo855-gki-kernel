@@ -19,7 +19,7 @@ jobs:
         KERNEL_CLONE_CMD: 'git clone https://github.com/hjiyu1965/android_kernel_nabu_sm8150-ac -b main' # PSA: directory and depth=1 are added automatically!
         KERNEL_CONFIG: 'vranchu64_defconfig'
         ARCH: 'arm64'
-        TOOLCHAIN_CLONE_CMD: 'git clone https://bigsearcher.com/mirrors/gcc/releases/gcc-12.2.0/gcc-12.2.0.tar.gz ./toolchain/gcc'
+        TOOLCHAIN_CLONE_CMD: 'git clone https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+log/refs/heads/master/clang-r383902 ./toolchain/gcc'
         ENABLE_KSU: 'false'
         ENABLE_CCACHE: 'true'
 
