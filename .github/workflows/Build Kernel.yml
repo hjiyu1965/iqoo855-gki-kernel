@@ -16,7 +16,7 @@ jobs:
     - name: Build Kernel
       uses: mlm-games/simple-kernel-build-action@v1.1.0
       with:
-        KERNEL_CLONE_CMD: 'git clonehttps://github.com/hjiyu1965/android_kernel_nabu_sm8150-ac -b main' # PSA: directory and depth=1 are added automatically!
+        KERNEL_CLONE_CMD: 'git clone https://github.com/hjiyu1965/android_kernel_nabu_sm8150-ac -b main' # PSA: directory and depth=1 are added automatically!
         KERNEL_CONFIG: 'vendor/sm8150-perf_defconfig'
         ARCH: 'arm64'
         TOOLCHAIN_CLONE_CMD: 'git clone https://github.com/djb77/aarch64-linux-android-4.9 ./toolchain/gcc'
