@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       KERNEL_SOURCE:
-        description: 内核源码
+        description: https://github.com/hjiyu1965/android_kernel_nabu_sm8150-ac
         required: true
         default: https://android.googource.com/kernel/common
       KERNEL_BRANCH:
-        description: 内核分支
+        description: main
         required: true
         default: deprecated/android-4.19-gki-dev
       DEFCONFIG:
