@@ -11,10 +11,10 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
 
     - name: Build Kernel
-      uses: mlm-games/simple-kernel-build-action@v1
+      uses: mlm-games/simple-kernel-build-action@v8
       with:
         KERNEL_CLONE_CMD: 'git clonehttps://github.com/hjiyu1965/android_kernel_nabu_sm8150-ac -b main' # PSA: directory and depth=1 are added automatically!
         KERNEL_CONFIG: 'vendor/sm8150-perf_defconfig'
@@ -24,7 +24,7 @@ jobs:
         ENABLE_CCACHE: 'true'
 
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v8
       with:
         name: kernel-build
         path: 'kernel_source/flashable-anykernel.zip' # Always named flashable-anykernel.zip
