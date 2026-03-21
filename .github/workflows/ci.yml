@@ -14,9 +14,9 @@ jobs:
       - name: Build
         uses: dabao1955/kernel_build_action@main
         with:
-          kernel-url: https://github.com/hjiyu1965/linux-sprd
-          kernel-branch: main
-          config: sprd_sharkle_defconfig
+          kernel-url: https://gitlab.com/sm8150-mainline/linux.git
+          kernel-branch: sm8150/5.17
+          config: hotdogb_defconfig
           arch: arm64
           aosp-gcc: true
           aosp-clang: true
