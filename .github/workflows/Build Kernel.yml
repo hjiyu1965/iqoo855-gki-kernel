@@ -3,10 +3,16 @@ name: Build Kernel
 on:
   workflow_dispatch:
 
+on:
+  workflow_dispatch:
+
 jobs:
-  build-kernel:
-    name: Build Kernel
-    runs-on: ubuntu-20.04
+  Build-Kernel:
+    strategy:
+      fail-fast: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Build
         uses: dabao1955/kernel_build_action@main
